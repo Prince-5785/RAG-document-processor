@@ -1,0 +1,49 @@
+# LLM-Powered Document Processing System Configuration
+
+# Embedding Model Configuration
+embedding:
+  model_name: "sentence-transformers/all-MiniLM-L6-v2"
+  device: "cpu"  # Change to "cuda" if GPU available
+  batch_size: 32
+
+# LLM Configuration
+llm:
+  model_name: "microsoft/DialoGPT-medium"  # Fallback model, replace with Llama2/Mistral
+  device: "cpu"
+  max_length: 2048
+  temperature: 0.1
+  top_p: 0.9
+  do_sample: true
+
+# Document Processing
+document_processing:
+  chunk_size: 1000
+  chunk_overlap: 200
+  separators: ["\n\n", "\n", " ", ""]
+  
+# Vector Store Configuration
+vector_store:
+  persist_directory: "./data/chroma_index"
+  collection_name: "insurance_documents"
+  distance_metric: "cosine"
+  
+# Retrieval Configuration
+retrieval:
+  top_k: 5
+  score_threshold: 0.7
+  
+# UI Configuration
+ui:
+  title: "CodersHub Insurance Query Solver"
+  max_file_size: 200  # MB
+  supported_formats: ["pdf", "docx", "eml", "txt"]
+  
+# Logging
+logging:
+  level: "INFO"
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  
+# Cache Configuration
+cache:
+  enable_embedding_cache: true
+  cache_directory: "./data/cache"

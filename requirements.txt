@@ -1,0 +1,54 @@
+# Core ML and NLP libraries
+torch>=2.0.0
+transformers>=4.30.0
+sentence-transformers>=2.2.2
+langchain>=0.1.0
+langchain-community>=0.0.20
+
+# Vector database
+chromadb>=0.4.0
+
+# Document processing
+PyPDF2>=3.0.1
+pdfplumber>=0.9.0
+python-docx>=0.8.11
+python-multipart>=0.0.6
+
+# Web framework
+streamlit>=1.28.0
+streamlit-extras>=0.3.0
+
+# Data processing
+pandas>=2.0.0
+numpy>=1.24.0
+
+# HTTP and API
+requests>=2.31.0
+httpx>=0.24.0
+
+# Utilities
+python-dotenv>=1.0.0
+pydantic>=2.0.0
+typing-extensions>=4.7.0
+
+# Development and testing
+pytest>=7.4.0
+pytest-asyncio>=0.21.0
+black>=23.0.0
+flake8>=6.0.0
+
+# Optional: For better PDF processing
+pymupdf>=1.23.0
+
+# Optional: For email processing
+email-validator>=2.0.0
+
+# Optional: For advanced text processing
+spacy>=3.6.0
+nltk>=3.8.0
+
+# Logging and monitoring
+loguru>=0.7.0
+
+# Configuration management
+pyyaml>=6.0.0

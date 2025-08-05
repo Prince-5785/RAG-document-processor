@@ -1,0 +1,201 @@
+CLAIMS PROCESSING GUIDELINES
+
+Document Version: 2.1
+Last Updated: March 2024
+Applicable to: All Health Insurance Policies
+
+SECTION A: GENERAL CLAIM PROCESSING RULES
+
+A.1 Eligibility Verification:
+- Policy must be active and premiums paid
+- Treatment must fall within policy coverage
+- Waiting periods must be completed
+- Age limits must be satisfied
+
+A.2 Documentation Requirements:
+- Original bills and receipts
+- Discharge summary from hospital
+- Diagnostic reports and test results
+- Doctor's prescription and treatment notes
+- Identity proof of insured person
+
+A.3 Time Limits:
+- Claim intimation: 30 days from discharge
+- Document submission: 45 days from discharge
+- Claim settlement: 30 days from complete documentation
+
+SECTION B: CASHLESS CLAIM PROCEDURES
+
+B.1 Pre-Authorization Process:
+- Submit request 48 hours before planned treatment
+- Emergency cases: Within 24 hours of admission
+- Required documents: ID proof, policy copy, medical reports
+- Approval/rejection communicated within 2 hours
+
+B.2 Network Hospital Requirements:
+- Treatment must be at empaneled hospitals
+- Hospital must submit bills directly to insurer
+- Patient responsible only for non-covered expenses
+- Discharge summary required for final settlement
+
+B.3 Emergency Procedures:
+- Immediate treatment allowed without pre-authorization
+- Intimation required within 24 hours
+- Retrospective approval based on medical necessity
+
+SECTION C: REIMBURSEMENT CLAIM PROCEDURES
+
+C.1 Document Submission:
+- Original bills (photocopies not accepted)
+- Detailed breakdown of charges
+- Payment receipts from hospital/clinic
+- Medical reports supporting treatment
+
+C.2 Investigation Process:
+- Medical necessity verification
+- Bill verification and audit
+- Hospital/doctor verification if required
+- Additional documents may be requested
+
+C.3 Settlement Process:
+- Eligible amount calculated based on policy terms
+- Deductibles and co-payments applied
+- Payment made via NEFT/cheque
+- Settlement advice sent to policyholder
+
+SECTION D: SPECIFIC TREATMENT GUIDELINES
+
+D.1 Surgery Claims:
+- Pre-authorization mandatory for planned surgeries
+- Surgeon's qualification verification required
+- Post-operative care covered as per policy
+- Complications covered if medically necessary
+
+D.2 Maternity Claims:
+- 36-month waiting period applicable
+- Normal delivery: Up to ₹50,000
+- Cesarean delivery: Up to ₹75,000
+- Newborn coverage: 90 days from birth
+
+D.3 Critical Illness Claims:
+- Specialist consultation required
+- Survival period: 30 days from diagnosis
+- Lump sum payment on diagnosis confirmation
+- No further claims under base policy for same condition
+
+D.4 Dental Claims:
+- Covered only if due to accident
+- Cosmetic dental work excluded
+- Root canal and extractions covered post-accident
+- Maximum limit: ₹25,000 per policy year
+
+SECTION E: CLAIM REJECTION CRITERIA
+
+E.1 Policy-Related Rejections:
+- Policy lapsed due to non-payment
+- Treatment during waiting period
+- Exclusions as per policy terms
+- Fraudulent claims
+
+E.2 Medical Rejections:
+- Treatment not medically necessary
+- Experimental or investigational treatment
+- Self-inflicted injuries
+- Treatment for excluded conditions
+
+E.3 Documentation Rejections:
+- Incomplete documentation
+- Bills not in insured's name
+- Altered or forged documents
+- Late submission beyond time limits
+
+SECTION F: CLAIM SETTLEMENT AMOUNTS
+
+F.1 Room Rent Limits:
+- Standard rooms: Up to ₹5,000 per day
+- ICU/ICCU: Up to ₹10,000 per day
+- Proportionate deduction if limits exceeded
+- Private room charges subject to medical necessity
+
+F.2 Surgeon Fees:
+- As per policy schedule
+- Maximum 20% of sum insured for major surgeries
+- Assistant surgeon: 20% of main surgeon's fee
+- Anesthetist: 25% of main surgeon's fee
+
+F.3 Diagnostic Tests:
+- Pre-hospitalization: 30 days before admission
+- Post-hospitalization: 60 days after discharge
+- Covered up to policy limits
+- Must be related to hospitalized illness
+
+SECTION G: SPECIAL CASES
+
+G.1 Domiciliary Treatment:
+- Treatment at home for conditions requiring hospitalization
+- Minimum 3 days treatment required
+- Doctor's certificate of medical necessity
+- Limited to specific conditions listed in policy
+
+G.2 Day Care Procedures:
+- Procedures not requiring 24-hour hospitalization
+- Must be in approved day care list
+- Same documentation requirements as hospitalization
+- Pre-authorization recommended
+
+G.3 Emergency Cases:
+- Life-threatening conditions
+- Immediate medical attention required
+- Relaxed documentation requirements initially
+- Complete documents required within 7 days
+
+SECTION H: FRAUD PREVENTION
+
+H.1 Red Flags:
+- Unusual billing patterns
+- Inflated medical bills
+- Treatment by unqualified practitioners
+- Claims immediately after policy purchase
+
+H.2 Investigation Triggers:
+- High-value claims
+- Repeat claims from same hospital
+- Claims with suspicious documentation
+- Tips from whistleblowers
+
+H.3 Fraud Consequences:
+- Claim rejection
+- Policy cancellation
+- Legal action
+- Blacklisting from future coverage
+
+SECTION I: CUSTOMER COMMUNICATION
+
+I.1 Claim Status Updates:
+- SMS alerts at each stage
+- Online portal for tracking
+- Email notifications for important updates
+- Customer care support
+
+I.2 Settlement Communication:
+- Detailed settlement letter
+- Explanation of deductions
+- Appeal process information
+- Feedback collection
+
+SECTION J: QUALITY ASSURANCE
+
+J.1 Processing Standards:
+- 95% claims settled within TAT
+- Less than 2% rejection rate target
+- Customer satisfaction score >4.5/5
+- Regular process audits
+
+J.2 Continuous Improvement:
+- Monthly review of rejection reasons
+- Process optimization initiatives
+- Technology upgrades
+- Staff training programs
+
+For detailed policy terms and conditions, refer to the complete policy document.
+Customer queries: claims@healthinsurance.com | 1800-123-4567
