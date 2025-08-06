@@ -108,21 +108,55 @@ def clean_text(text: str) -> str:
     return text.strip()
 
 def extract_json_from_text(text: str) -> Optional[Dict[str, Any]]:
-    """Extract JSON object from text using regex."""
-    import re
-    
-    # Look for JSON-like patterns
-    json_pattern = r'\{[^{}]*\}'
-    matches = re.findall(json_pattern, text)
-    
-    for match in matches:
-        try:
-            return json.loads(match)
-        except json.JSONDecodeError:
-            continue
-    
-    return None
+    """
+    Robustly extracts the first valid JSON object from a string.
+    It can handle JSON embedded within markdown code blocks or plain text.
+    """
+    if not isinstance(text, str):
+        return None
 
+    # Pattern to find JSON within ```json ... ``` markdown block
+    match = re.search(r'```json\s*(\{.*?\})\s*```', text, re.DOTALL)
+    if match:
+        json_str = match.group(1)
+    else:
+        # Fallback to finding the first occurrence of a curly brace
+        first_brace = text.find('{')
+        if first_brace == -1:
+            logger.debug("No JSON object found in text.")
+            return None
+        json_str = text[first_brace:]
+
+    # Attempt to parse the found string into JSON
+    try:
+        # Clean up potential LLM artifacts like trailing commas before closing bracket/brace
+        cleaned_json_str = re.sub(r',\s*([\}\]])', r'\1', json_str)
+        return json.loads(cleaned_json_str)
+    except json.JSONDecodeError:
+        # If cleaning fails, try to find a valid JSON object by balancing braces
+        open_braces = 0
+        end_index = -1
+        for i, char in enumerate(json_str):
+            if char == '{':
+                open_braces += 1
+            elif char == '}':
+                open_braces -= 1
+            if open_braces == 0 and i > 0:
+                end_index = i + 1
+                break
+        
+        if end_index != -1:
+            potential_json = json_str[:end_index]
+            try:
+                return json.loads(potential_json)
+            except json.JSONDecodeError as e:
+                logger.error(f"Failed to decode JSON substring: {e}")
+                logger.debug(f"Invalid JSON string: {potential_json}")
+                return None
+
+    logger.error("Could not extract a valid JSON object from the provided text.")
+    return None
+    
 class Timer:
     """Simple timer context manager."""
     

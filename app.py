@@ -292,6 +292,15 @@ def main():
         against the indexed policy documents and provide approval decisions with justifications.
         """)
         
+        st.subheader("Choose AI Model")
+
+        model_options = ["Default(Automatic Fallback)"] + st.session_state.pipeline.llm_service.model_sequence
+
+        selected_model = st.selectbox(
+            "Select a model to process your query:",
+            options=model_options,
+            help="Choose 'Default' to use the automatic fallback chain, or select a specific model to prioritize it."
+        )
         # Example queries
         with st.expander("💡 Example Queries"):
             st.markdown("""

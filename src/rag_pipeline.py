@@ -163,7 +163,7 @@ class RAGPipeline:
                     ],
                     'metadata': {
                         'processing_successful': True,
-                        'embedding_dimension': len(query_embedding) if len(query_embedding) > 0 else 0,
+                        'embedding_dimension': self.embedding_service.get_embedding_dimension(),
                         'retrieval_threshold': self.score_threshold
                     }
                 }

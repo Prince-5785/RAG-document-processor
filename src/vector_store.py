@@ -47,31 +47,21 @@ class VectorStore:
         self.logger.info("Initializing ChromaDB vector store")
         
         try:
-            # Initialize ChromaDB client with persistence
             self.client = chromadb.PersistentClient(
                 path=self.persist_directory,
-                settings=Settings(
-                    anonymized_telemetry=False,
-                    allow_reset=True
-                )
+                settings=Settings(anonymized_telemetry=False)
             )
             
-            # Get or create collection
-            try:
-                self.collection = self.client.get_collection(
-                    name=self.collection_name,
-                    metadata={"hnsw:space": self.distance_metric}
-                )
-                self.logger.info(f"Loaded existing collection: {self.collection_name}")
-            except Exception:
-                self.collection = self.client.create_collection(
-                    name=self.collection_name,
-                    metadata={"hnsw:space": self.distance_metric}
-                )
-                self.logger.info(f"Created new collection: {self.collection_name}")
+            # This is the recommended "get_or_create" pattern which prevents the error.
+            self.collection = self.client.get_or_create_collection(
+                name=self.collection_name,
+                metadata={"hnsw:space": self.distance_metric}
+            )
+            self.logger.info(f"Loaded or created collection: {self.collection_name} with distance metric '{self.distance_metric}'")
                 
         except Exception as e:
             self.logger.error(f"Failed to initialize ChromaDB: {e}")
+            self.collection = None # Ensure collection is None on failure
             raise
     
     def add_documents(self, chunks: List[Dict[str, Any]]) -> None:

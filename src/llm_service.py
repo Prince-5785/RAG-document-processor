@@ -1,175 +1,201 @@
-"""
-LLM service for query parsing and decision making using local language models.
-"""
-
 import json
 import logging
 import re
-from typing import Dict, Any, List, Optional, Union
+from typing import Dict, Any, List, Optional, Union, Callable
 
+try:
+    from groq import Groq, APIError
+    GROQ_AVAILABLE = True
+except ImportError:
+    GROQ_AVAILABLE = False
+    logging.warning("Groq SDK not available. Install with 'pip install groq'")
 try:
     from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
     import torch
     TRANSFORMERS_AVAILABLE = True
 except ImportError:
     TRANSFORMERS_AVAILABLE = False
-    logging.warning("Transformers not available. Install transformers for LLM functionality.")
+    logging.warning("Transformers not available. Install with 'pip install transformers torch'")
 
 from .utils import Timer, extract_json_from_text
 
 
 class LLMService:
-    """Service for LLM-based query parsing and decision making."""
+    """
+    Service for LLM-based query parsing and decision making with a configurable, sequential fallback chain.
+    """
     
     def __init__(self, config: Dict[str, Any]):
         self.config = config
         self.llm_config = config.get('llm', {})
-        self.model_name = self.llm_config.get('model_name', 'microsoft/DialoGPT-medium')
-        self.device = self.llm_config.get('device', 'cpu')
-        self.max_length = self.llm_config.get('max_length', 2048)
-        self.temperature = self.llm_config.get('temperature', 0.1)
-        self.top_p = self.llm_config.get('top_p', 0.9)
-        
-        self.model = None
-        self.tokenizer = None
-        self.pipeline = None
         self.logger = logging.getLogger(__name__)
-    
-    def load_model(self) -> None:
-        """Load the language model and tokenizer."""
-        if not TRANSFORMERS_AVAILABLE:
-            raise ImportError("Transformers not available")
+
+        # API Configuration
+        api_config = self.llm_config.get('api', {})
+        self.model_sequence = api_config.get('model_sequence', [])
+        self.groq_api_key = api_config.get('groq_api_key')
+        self.groq_client = None
+        if GROQ_AVAILABLE and self.groq_api_key:
+            self.groq_client = Groq(api_key=self.groq_api_key)
         
-        if self.model is not None:
+        # Local Model Configuration
+        local_model_config = self.llm_config.get('local_model', {})
+        self.local_model_name = local_model_config.get('model_name')
+        self.device = local_model_config.get('device', 'cpu')
+
+        # Generation Parameters
+        gen_params = self.llm_config.get('generation_params', {})
+        self.temperature = gen_params.get('temperature', 0.1)
+        self.top_p = gen_params.get('top_p', 0.9)
+        self.max_tokens_parsing = gen_params.get('max_new_tokens_parsing', 250)
+        self.max_tokens_decision = gen_params.get('max_new_tokens_decision', 500)
+
+        # Initialize local model attributes
+        self.local_model = None
+        self.local_tokenizer = None
+        self.local_pipeline = None
+        
+        self.load_local_model()
+
+    def load_local_model(self) -> None:
+        """Loads the local language model and tokenizer for the final LLM fallback."""
+        if not TRANSFORMERS_AVAILABLE or not self.local_model_name:
+            self.logger.info("No local model configured or transformers not installed. Skipping load.")
             return
-        
-        self.logger.info(f"Loading LLM model: {self.model_name}")
-        
+        if self.local_model is not None:
+            return
+        self.logger.info(f"Loading local fallback LLM model: {self.local_model_name}")
         try:
-            with Timer(f"Loading LLM model {self.model_name}"):
-                # Load tokenizer
-                self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
-                
-                # Add padding token if not present
-                if self.tokenizer.pad_token is None:
-                    self.tokenizer.pad_token = self.tokenizer.eos_token
-                
-                # Load model
-                self.model = AutoModelForCausalLM.from_pretrained(
-                    self.model_name,
-                    torch_dtype=torch.float16 if self.device == 'cuda' else torch.float32,
-                    device_map='auto' if self.device == 'cuda' else None,
-                    low_cpu_mem_usage=True
+            with Timer(f"Loading local LLM model {self.local_model_name}"):
+                self.local_tokenizer = AutoTokenizer.from_pretrained(self.local_model_name)
+                if self.local_tokenizer.pad_token is None:
+                    self.local_tokenizer.pad_token = self.local_tokenizer.eos_token
+                self.local_model = AutoModelForCausalLM.from_pretrained(
+                    self.local_model_name, device_map='auto' if self.device == 'cuda' else None
                 )
-                
-                # Create pipeline
-                self.pipeline = pipeline(
+                self.local_pipeline = pipeline(
                     "text-generation",
-                    model=self.model,
-                    tokenizer=self.tokenizer,
-                    device=0 if self.device == 'cuda' and torch.cuda.is_available() else -1,
-                    torch_dtype=torch.float16 if self.device == 'cuda' else torch.float32
+                    model=self.local_model,
+                    tokenizer=self.local_tokenizer,
+                    device=0 if self.device == 'cuda' and torch.cuda.is_available() else -1
                 )
-                
-                self.logger.info(f"Model loaded successfully on {self.device}")
-                
+                self.logger.info(f"Local model loaded successfully on {self.device}")
         except Exception as e:
-            self.logger.error(f"Failed to load LLM model: {e}")
-            # Fallback to a simpler approach
-            self._load_fallback_model()
-    
-    def _load_fallback_model(self) -> None:
-        """Load a fallback model for basic functionality."""
-        self.logger.info("Loading fallback model for basic functionality")
-        self.model = "fallback"
-        self.tokenizer = "fallback"
-        self.pipeline = None
-    
-    def parse_query(self, query: str) -> Dict[str, Any]:
-        """
-        Parse user query to extract structured information.
-        
-        Args:
-            query: Natural language query
-            
-        Returns:
-            Dictionary with extracted information
-        """
-        if self.model is None:
-            self.load_model()
-        
+            self.logger.error(f"Failed to load local LLM model: {e}")
+            self.local_pipeline = None
+
+    def parse_query(self, query: str, preferred_model: Optional[str] = None) -> Dict[str, Any]:
+        """Parses a user query using the sequential fallback chain."""
+        self.logger.info(f"Starting query parsing for: '{query[:50]}...'")
         prompt = self._create_query_parsing_prompt(query)
-        
-        if self.pipeline is not None:
-            try:
-                response = self._generate_response(prompt, max_new_tokens=200)
-                parsed_data = self._extract_json_from_response(response)
-                
-                if parsed_data:
-                    return parsed_data
-            except Exception as e:
-                self.logger.warning(f"LLM parsing failed, using fallback: {e}")
-        
-        # Fallback to rule-based parsing
+        parsed_data = self._execute_task_with_fallback(
+            prompt=prompt,
+            parse_function=self._extract_json_from_response,
+            max_new_tokens=self.max_tokens_parsing,
+            preferred_model=preferred_model
+        )
+        if parsed_data:
+            return parsed_data
+        self.logger.warning("All LLM attempts failed. Using final rule-based parser.")
         return self._fallback_query_parsing(query)
-    
-    def make_decision(self, query_data: Dict[str, Any], retrieved_contexts: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """
-        Make insurance decision based on query and retrieved contexts.
-        
-        Args:
-            query_data: Parsed query information
-            retrieved_contexts: List of relevant document chunks
-            
-        Returns:
-            Dictionary with decision, payout, and justification
-        """
-        if self.model is None:
-            self.load_model()
-        
+
+    def make_decision(self, query_data: Dict[str, Any], retrieved_contexts: List[Dict[str, Any]], preferred_model: Optional[str] = None) -> Dict[str, Any]:
+        """Makes an insurance decision using the sequential fallback chain."""
+        self.logger.info("Starting decision making process.")
         prompt = self._create_decision_prompt(query_data, retrieved_contexts)
-        
-        if self.pipeline is not None:
-            try:
-                response = self._generate_response(prompt, max_new_tokens=500)
-                decision_data = self._parse_decision_response(response)
-                
-                if decision_data:
-                    return decision_data
-            except Exception as e:
-                self.logger.warning(f"LLM decision making failed, using fallback: {e}")
-        
-        # Fallback to rule-based decision
+        decision_data = self._execute_task_with_fallback(
+            prompt=prompt,
+            parse_function=self._parse_decision_response,
+            max_new_tokens=self.max_tokens_decision,
+            preferred_model=preferred_model
+        )
+        if decision_data:
+            return decision_data
+        self.logger.warning("All LLM attempts failed. Using final rule-based decision maker.")
         return self._fallback_decision_making(query_data, retrieved_contexts)
+
+    def _execute_task_with_fallback(self, prompt: str, parse_function: Callable, max_new_tokens: int, preferred_model: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        """
+        Core logic to attempt a task with a sequence of models.
+        If a preferred model is given, it's tried first.
+        """
+        model_run_sequence = list(self.model_sequence)
+        # FIX #1: Corrected typo from `preffered_model` to `preferred_model`
+        if preferred_model and preferred_model in model_run_sequence:
+            model_run_sequence.remove(preferred_model)
+            model_run_sequence.insert(0, preferred_model)
+
+        if self.groq_client:
+            # The name `model_run_sequence` was defined above but not used in the original code. Corrected to use it.
+            for model_id in model_run_sequence:
+                try:
+                    self.logger.info(f"Attempting task with API model: {model_id}")
+                    response_text = self._generate_response_from_api(model_id, prompt, max_new_tokens)
+                    if response_text:
+                        parsed_result = parse_function(response_text)
+                        if parsed_result:
+                            self.logger.info(f"Success with API model: {model_id}")
+                            if isinstance(parsed_result, dict):
+                                parsed_result['model_used'] = model_id
+                            return parsed_result
+                        else:
+                            self.logger.warning(f"Failed to parse response from {model_id}.")
+                except Exception as e:
+                    self.logger.error(f"Error with API model {model_id}: {e}")
+                self.logger.warning(f"Attempt with {model_id} failed. Trying next model.")
+
+        if self.local_pipeline:
+            try:
+                self.logger.info(f"API models failed. Attempting task with local model: {self.local_model_name}")
+                local_response = self._generate_response_from_local(prompt, max_new_tokens)
+                if local_response:
+                    parsed_result = parse_function(local_response)
+                    if parsed_result:
+                        self.logger.info(f"Success with local model: {self.local_model_name}")
+                        if isinstance(parsed_result, dict):
+                            parsed_result['model_used'] = self.local_model_name
+                        return parsed_result
+                    else:
+                        self.logger.warning(f"Failed to parse response from local model.")
+            except Exception as e:
+                self.logger.error(f"Error with local model {self.local_model_name}: {e}")
+        return None
     
-    def _generate_response(self, prompt: str, max_new_tokens: int = 200) -> str:
-        """Generate response using the LLM pipeline."""
+    def _generate_response_from_api(self, model_id: str, prompt: str, max_new_tokens: int) -> Optional[str]:
+        """Generates a response using the Groq API."""
         try:
-            outputs = self.pipeline(
-                prompt,
-                max_new_tokens=max_new_tokens,
+            chat_completion = self.groq_client.chat.completions.create(
+                messages=[{"role": "user", "content": prompt}],
+                model=model_id,
                 temperature=self.temperature,
+                max_tokens=max_new_tokens,
                 top_p=self.top_p,
-                do_sample=True,
-                pad_token_id=self.tokenizer.eos_token_id,
-                return_full_text=False
             )
-            
-            if outputs and len(outputs) > 0:
-                return outputs[0]['generated_text'].strip()
-            
-        except Exception as e:
-            self.logger.error(f"Error generating response: {e}")
-        
-        return ""
-    
+            return chat_completion.choices[0].message.content
+        except APIError as e:
+            self.logger.error(f"Groq API Error for model {model_id}: {e}")
+            return None
+
+    def _generate_response_from_local(self, prompt: str, max_new_tokens: int) -> Optional[str]:
+        """Generates a response using the local Hugging Face pipeline."""
+        if not self.local_pipeline: return None
+        outputs = self.local_pipeline(
+            prompt,
+            max_new_tokens=max_new_tokens,
+            pad_token_id=self.local_tokenizer.eos_token_id,
+            return_full_text=False
+        )
+        if outputs and len(outputs) > 0:
+            return outputs[0]['generated_text'].strip()
+        return None
+
     def _create_query_parsing_prompt(self, query: str) -> str:
-        """Create prompt for query parsing."""
-        return f"""Extract structured information from the following insurance query. Return only a JSON object with the specified fields.
+        """Creates a prompt for the query parsing task."""
+        return f"""You are an expert at extracting structured information from insurance queries. Analyze the user's query and output a single, valid JSON object. Do not add any extra text or explanations.
 
 Query: "{query}"
 
-Extract the following information and return as JSON:
+JSON format:
 {{
   "age": <integer or null>,
   "gender": "<male/female/null>",
@@ -179,10 +205,11 @@ Extract the following information and return as JSON:
   "policy_type": "<policy type or null>"
 }}
 
-JSON:"""
+JSON:
+"""
     
     def _create_decision_prompt(self, query_data: Dict[str, Any], contexts: List[Dict[str, Any]]) -> str:
-        """Create prompt for decision making."""
+        """Creates a prompt for the decision-making task."""
         context_text = ""
         for i, context in enumerate(contexts[:5], 1):
             context_text += f"Clause {i}: {context.get('text', '')}\n\n"
@@ -197,43 +224,34 @@ Relevant Policy Clauses:
 
 Instructions:
 1. Decide: APPROVED or REJECTED
-2. If approved, estimate payout amount in ₹ (Indian Rupees)
-3. Provide 2-3 clear justification sentences citing specific clauses
-4. Be conservative and follow policy terms strictly
+2. If approved, estimate payout amount in ₹ (Indian Rupees). If rejected, payout is 0.
+3. Provide 2-3 clear justification sentences citing specific clauses.
+4. Be conservative and follow policy terms strictly.
 
-Response format:
+Response format (strictly follow this):
 Decision: [APPROVED/REJECTED]
-Payout: ₹[amount or 0]
+Payout: ₹[amount]
 Justification: [Clear explanation with clause references]
 
 Response:"""
     
     def _extract_json_from_response(self, response: str) -> Optional[Dict[str, Any]]:
-        """Extract JSON from LLM response."""
-        # Try to find JSON in the response
-        json_match = re.search(r'\{[^{}]*\}', response)
-        if json_match:
-            try:
-                return json.loads(json_match.group())
-            except json.JSONDecodeError:
-                pass
-        
+        """Extracts a JSON object from a model's response text."""
         return extract_json_from_text(response)
     
     def _parse_decision_response(self, response: str) -> Optional[Dict[str, Any]]:
-        """Parse decision response from LLM."""
+        """Parses the structured decision (Decision, Payout, Justification) from a response."""
         try:
-            # Extract decision
             decision_match = re.search(r'Decision:\s*(APPROVED|REJECTED)', response, re.IGNORECASE)
-            decision = decision_match.group(1).upper() if decision_match else "REJECTED"
+            payout_match = re.search(r'Payout:\s*₹?\s*(\d[\d,]*\d|\d)', response)
+            justification_match = re.search(r'Justification:\s*(.+)', response, re.DOTALL)
             
-            # Extract payout
-            payout_match = re.search(r'Payout:\s*₹?(\d+(?:,\d+)*)', response)
-            payout = int(payout_match.group(1).replace(',', '')) if payout_match else 0
-            
-            # Extract justification
-            justification_match = re.search(r'Justification:\s*(.+?)(?:\n\n|\Z)', response, re.DOTALL)
-            justification = justification_match.group(1).strip() if justification_match else "No justification provided."
+            if not decision_match or not payout_match or not justification_match:
+                return None
+
+            decision = decision_match.group(1).upper()
+            payout = int(payout_match.group(1).replace(',', ''))
+            justification = justification_match.group(1).strip()
             
             return {
                 'decision': decision,
@@ -241,77 +259,43 @@ Response:"""
                 'justification': justification,
                 'raw_response': response
             }
-            
         except Exception as e:
             self.logger.error(f"Error parsing decision response: {e}")
             return None
     
     def _fallback_query_parsing(self, query: str) -> Dict[str, Any]:
-        """Fallback rule-based query parsing."""
+        """Final fallback using rule-based regular expressions for query parsing."""
+        self.logger.info("Executing rule-based query parsing.")
         query_lower = query.lower()
-        
-        # Extract age
         age_match = re.search(r'(\d+)[-\s]*year', query_lower)
         age = int(age_match.group(1)) if age_match else None
-        
-        # Extract gender
-        gender = None
-        if 'male' in query_lower and 'female' not in query_lower:
-            gender = 'male'
-        elif 'female' in query_lower:
-            gender = 'female'
-        
-        # Extract common procedures
+        gender = 'male' if 'male' in query_lower and 'female' not in query_lower else 'female' if 'female' in query_lower else None
         procedures = ['surgery', 'treatment', 'operation', 'procedure', 'therapy']
-        procedure = None
-        for proc in procedures:
-            if proc in query_lower:
-                procedure = proc
-                break
-        
-        # Extract location (common Indian cities)
+        procedure = next((proc for proc in procedures if proc in query_lower), None)
         cities = ['mumbai', 'delhi', 'bangalore', 'pune', 'chennai', 'kolkata', 'hyderabad']
-        location = None
-        for city in cities:
-            if city in query_lower:
-                location = city.title()
-                break
-        
-        # Extract policy duration
-        duration = None
-        if 'month' in query_lower:
-            month_match = re.search(r'(\d+)[-\s]*month', query_lower)
-            duration = int(month_match.group(1)) if month_match else None
-        elif 'annual' in query_lower or 'year' in query_lower:
-            duration = 12
+        location = next((city.title() for city in cities if city in query_lower), None)
+        month_match = re.search(r'(\d+)[-\s]*month', query_lower)
+        duration = int(month_match.group(1)) if month_match else 12 if 'annual' in query_lower or 'year' in query_lower else None
         
         return {
-            'age': age,
-            'gender': gender,
-            'procedure': procedure,
-            'location': location,
-            'policy_duration_months': duration,
+            'age': age, 'gender': gender, 'procedure': procedure, 'location': location,
+            'policy_duration_months': duration, 'model_used': 'rule-based-fallback',
             'policy_type': 'health' if any(term in query_lower for term in ['health', 'medical', 'surgery']) else None
         }
-    
+
     def _fallback_decision_making(self, query_data: Dict[str, Any], contexts: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """Fallback rule-based decision making."""
-        # Simple rule-based decision
+        """Final fallback using simple business rules for decision making."""
+        self.logger.info("Executing rule-based decision making.")
         decision = "APPROVED"
-        payout = 50000  # Default payout
-        
-        # Basic rules
-        age = query_data.get('age', 0)
+        payout = 50000
+        justification = f"Claim approved based on policy terms. Age: {query_data.get('age', 'N/A')}, Procedure: {query_data.get('procedure', 'N/A')}"
+        age = query_data.get('age')
         if age and age > 65:
             decision = "REJECTED"
             payout = 0
             justification = "Age exceeds policy limit of 65 years."
-        else:
-            justification = f"Claim approved based on policy terms. Age: {age}, Procedure: {query_data.get('procedure', 'N/A')}"
         
         return {
-            'decision': decision,
-            'payout': payout,
-            'justification': justification,
-            'raw_response': f"Fallback decision: {decision}"
+            'decision': decision, 'payout': payout, 'justification': justification,
+            'raw_response': f"Fallback decision: {decision}", 'model_used': 'rule-based-fallback'
         }
