@@ -6,6 +6,7 @@ import os
 import json
 import yaml
 import logging
+import re
 from typing import Dict, Any, List, Optional
 from pathlib import Path
 import hashlib
@@ -156,7 +157,7 @@ def extract_json_from_text(text: str) -> Optional[Dict[str, Any]]:
 
     logger.error("Could not extract a valid JSON object from the provided text.")
     return None
-    
+
 class Timer:
     """Simple timer context manager."""
     

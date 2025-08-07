@@ -320,9 +320,12 @@ def main():
         # Query button
         if st.button("🔍 Process Query", type="primary", disabled=not user_query.strip()):
             if user_query.strip():
+                preferred_model_arg = None
+                if selected_model != "Default(Automatic Fallback)":
+                    preferred_model_arg = selected_model
                 with st.spinner("Processing your query..."):
                     start_time = time.time()
-                    result = st.session_state.pipeline.query(user_query.strip())
+                    result = st.session_state.pipeline.query(user_query.strip(),preferred_model=preferred_model_arg)
                     processing_time = time.time() - start_time
                     
                     st.subheader("📋 Query Results")

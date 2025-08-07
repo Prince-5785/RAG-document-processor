@@ -32,13 +32,18 @@ class RAGPipeline:
         if groq_api_key:
             # Ensure nested dictionaries exist and inject the key
             self.config.setdefault('llm', {}).setdefault('api', {})['groq_api_key'] = groq_api_key
-            logging.info("GROQ API key successfully loaded from .env file.")
-        else:
-            logging.warning("GROQ_API_KEY not found in .env file. API calls will fail.")
+            #logging.info("GROQ API key successfully loaded from .env file.")
+       # else:
+        #    logging.warning("GROQ_API_KEY not found in .env file. API calls will fail.")
 
         setup_logging(self.config)
         
         self.logger = logging.getLogger(__name__)
+        if groq_api_key:
+            self.logger.info("GROQ API key successfully loaded from .env file.")
+        else:
+            self.logger.warning("GROQ_API_KEY not found in .env file. API calls will fail.")
+
         
         # Initialize components
         self.document_processor = DocumentProcessor(self.config)
@@ -122,23 +127,24 @@ class RAGPipeline:
         
         return results
     
-    def query(self, user_query: str) -> Dict[str, Any]:
+    def query(self, user_query: str, preferred_model: Optional[str] = None) -> Dict[str, Any]:
         """
         Process a user query and return insurance decision.
         
         Args:
             user_query: Natural language query from user
+            preferred_model: Optional specific model ID to use for this query
             
         Returns:
             Dictionary with decision, justification, and metadata
         """
-        self.logger.info(f"Processing query: {user_query}")
+        self.logger.info(f"Processing query: '{user_query}' with preferred_model: {preferred_model}")
         
         try:
             with Timer("Query processing"):
-                # Step 1: Parse the query
+                # Step 1: Parse the query, passing the preferred model
                 self.logger.info("Parsing user query")
-                parsed_query = self.llm_service.parse_query(user_query)
+                parsed_query = self.llm_service.parse_query(user_query, preferred_model=preferred_model)
                 
                 # Step 2: Generate query embedding
                 self.logger.info("Generating query embedding")
@@ -152,9 +158,9 @@ class RAGPipeline:
                     score_threshold=self.score_threshold
                 )
                 
-                # Step 4: Make decision using LLM
+                # Step 4: Make decision using LLM, passing the preferred model
                 self.logger.info("Making insurance decision")
-                decision_result = self.llm_service.make_decision(parsed_query, retrieved_docs)
+                decision_result = self.llm_service.make_decision(parsed_query, retrieved_docs, preferred_model=preferred_model)
                 
                 # Step 5: Format final result
                 result = {
@@ -186,18 +192,18 @@ class RAGPipeline:
                 return result
                 
         except Exception as e:
-            self.logger.error(f"Error processing query: {e}")
+            self.logger.error(f"Error processing query: {e}", exc_info=True) # exc_info=True gives more debug info
             return {
                 'query': user_query,
                 'decision': 'ERROR',
                 'payout': 0,
-                'justification': f'Error processing query: {str(e)}',
+                'justification': f'An internal error occurred: {str(e)}',
                 'metadata': {
                     'processing_successful': False,
                     'error': str(e)
                 }
             }
-    
+                
     def _generate_json_output(self, result: Dict[str, Any]) -> Dict[str, Any]:
         """Generate structured JSON output for audit purposes."""
         return {

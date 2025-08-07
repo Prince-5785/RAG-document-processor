@@ -22,7 +22,7 @@ llm:
     device: "cpu"
 
   generation_params:
-    temperature: 0.1
+    temperature: 0.5
     top_p: 0.9
     max_new_tokens_parsing: 250
     max_new_tokens_decision: 500

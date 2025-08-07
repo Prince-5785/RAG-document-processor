@@ -213,33 +213,43 @@ JSON format:
 JSON:
 """
     
+
     def _create_decision_prompt(self, query_data: Dict[str, Any], contexts: List[Dict[str, Any]]) -> str:
-        """Creates a prompt for the decision-making task."""
+        """Creates a prompt for the decision-making task using multi-step reasoning."""
         context_text = ""
         for i, context in enumerate(contexts[:5], 1):
             context_text += f"Clause {i}: {context.get('text', '')}\n\n"
         
-        return f"""You are an insurance claims processor. Based on the query information and relevant policy clauses, make a decision.
+        return f"""You are a senior insurance claims processor. Your task is to meticulously evaluate an insurance claim based on the provided information and policy clauses. You must follow a strict reasoning process.
 
-Query Information:
+### REASONING STEPS:
+1.  **Analyze Policy Requirements:** First, carefully read the 'Relevant Policy Clauses' and identify the key conditions for approval. Note any age limits, waiting periods, covered procedures, or specific exclusions.
+2.  **Assess User Information:** Review the 'Query Information' provided. Note which details are present and which are missing (e.g., 'age is null').
+3.  **Compare and Identify Gaps:** Compare the user's information against the policy requirements you identified. Explicitly state any critical information that is missing. For example, if a clause mentions an age limit but the user's age is null, you must note this gap.
+4.  **Formulate a Conclusion:** Based on your comparison, make a final decision.
+    - **APPROVE:** Only if you have all necessary information and the claim clearly meets all policy requirements.
+    - **REJECT:** If the claim clearly violates a policy rule (e.g., age is outside the limit, procedure is explicitly excluded) OR if **critical information is missing** and you cannot verify compliance with the policy.
+5.  **Write Justification:** Your justification must be based on your reasoning. If rejecting due to missing information, you **must state exactly what information is needed.**
+
+---
+### TASK:
+
+**Query Information:**
 {json.dumps(query_data, indent=2)}
 
-Relevant Policy Clauses:
+**Relevant Policy Clauses:**
 {context_text}
 
-Instructions:
-1. Decide: APPROVED or REJECTED
-2. If approved, estimate payout amount in ₹ (Indian Rupees). If rejected, payout is 0.
-3. Provide 2-3 clear justification sentences citing specific clauses.
-4. Be conservative and follow policy terms strictly.
+---
+### FINAL OUTPUT:
+Provide your response strictly in the following format. Do not add any other text or explanations.
 
-Response format (strictly follow this):
 Decision: [APPROVED/REJECTED]
-Payout: ₹[amount]
-Justification: [Clear explanation with clause references]
+Payout: ₹[integer amount]
+Justification: [Your clear, step-by-step justification. If rejecting due to missing info, specify what is needed.]
 
 Response:"""
-    
+        
     def _extract_json_from_response(self, response: str) -> Optional[Dict[str, Any]]:
         """Extracts a JSON object from a model's response text."""
         return extract_json_from_text(response)
