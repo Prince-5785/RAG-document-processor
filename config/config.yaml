@@ -8,12 +8,24 @@ embedding:
 
 # LLM Configuration
 llm:
-  model_name: "microsoft/DialoGPT-medium"  # Fallback model, replace with Llama2/Mistral
-  device: "cpu"
-  max_length: 2048
-  temperature: 0.1
-  top_p: 0.9
-  do_sample: true
+  # This 'api' section is new and crucial
+  api:
+    # The actual key will be injected from .env by the pipeline
+    model_sequence:
+      - 'meta-llama/llama-4-maverick-17b-128e-instruct'
+      - 'llama-3.3-70b-versatile'
+      - 'gemma2-9b-it'
+      - 'llama-3.1-8b-instant'
+  
+  local_model:
+    model_name: null # Set to a model name like 'gemma:2b' for local fallback
+    device: "cpu"
+
+  generation_params:
+    temperature: 0.1
+    top_p: 0.9
+    max_new_tokens_parsing: 250
+    max_new_tokens_decision: 500
 
 # Document Processing
 document_processing:
@@ -32,7 +44,7 @@ retrieval:
   top_k: 5
   score_threshold: 0.7
   
-# UI Configuration
+# UI Configuration (This was missing)
 ui:
   title: "CodersHub Insurance Query Solver"
   max_file_size: 200  # MB

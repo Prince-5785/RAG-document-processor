@@ -4,6 +4,8 @@ Main RAG pipeline that orchestrates document processing, embedding, retrieval, a
 
 import logging
 import json
+import os
+from dotenv import load_dotenv
 from typing import Dict, Any, List, Optional, Union
 from pathlib import Path
 
@@ -25,6 +27,15 @@ class RAGPipeline:
             config_path: Path to configuration file
         """
         self.config = load_config(config_path)
+        load_dotenv()
+        groq_api_key = os.environ.get("GROQ_API_KEY")
+        if groq_api_key:
+            # Ensure nested dictionaries exist and inject the key
+            self.config.setdefault('llm', {}).setdefault('api', {})['groq_api_key'] = groq_api_key
+            logging.info("GROQ API key successfully loaded from .env file.")
+        else:
+            logging.warning("GROQ_API_KEY not found in .env file. API calls will fail.")
+
         setup_logging(self.config)
         
         self.logger = logging.getLogger(__name__)

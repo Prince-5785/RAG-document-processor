@@ -34,9 +34,14 @@ class LLMService:
         api_config = self.llm_config.get('api', {})
         self.model_sequence = api_config.get('model_sequence', [])
         self.groq_api_key = api_config.get('groq_api_key')
+        self.logger.info(f"Got the API KEY:{self.groq_api_key}")
         self.groq_client = None
         if GROQ_AVAILABLE and self.groq_api_key:
             self.groq_client = Groq(api_key=self.groq_api_key)
+            if self.groq_client:
+                self.logger.info("Groq Client Online")
+            else:
+                self.logger.error("Grow not Online")
         
         # Local Model Configuration
         local_model_config = self.llm_config.get('local_model', {})
