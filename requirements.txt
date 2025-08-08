@@ -18,6 +18,7 @@ python-multipart>=0.0.6
 streamlit>=1.28.0
 streamlit-extras>=0.3.0
 
+
 # Data processing
 pandas>=2.0.0
 numpy>=1.24.0
@@ -52,3 +53,9 @@ loguru>=0.7.0
 
 # Configuration management
 pyyaml>=6.0.0
+
+#api management
+groq
+fastapi>=0.111.0
+uvicorn[standard]>=0.29.0
+httpx>=0.27.0

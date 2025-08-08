@@ -1,11 +1,7 @@
-"""
-Vector store implementation using ChromaDB for storing and retrieving document embeddings.
-"""
-
 import os
 import logging
 import uuid
-from typing import List, Dict, Any, Optional, Tuple
+from typing import List, Dict, Any, Optional
 import numpy as np
 
 try:
@@ -33,201 +29,129 @@ class VectorStore:
         self.collection = None
         self.logger = logging.getLogger(__name__)
         
-        # Create directories
         create_directories([self.persist_directory])
     
     def initialize(self) -> None:
-        """Initialize ChromaDB client and collection."""
+        """Initializes the ChromaDB client and gets or creates the collection."""
         if not CHROMADB_AVAILABLE:
             raise ImportError("ChromaDB not available")
-        
-        if self.client is not None:
+        if self.collection is not None:
             return
         
         self.logger.info("Initializing ChromaDB vector store")
-        
         try:
             self.client = chromadb.PersistentClient(
                 path=self.persist_directory,
                 settings=Settings(anonymized_telemetry=False)
             )
-            
-            # This is the recommended "get_or_create" pattern which prevents the error.
             self.collection = self.client.get_or_create_collection(
                 name=self.collection_name,
                 metadata={"hnsw:space": self.distance_metric}
             )
-            self.logger.info(f"Loaded or created collection: {self.collection_name} with distance metric '{self.distance_metric}'")
-                
+            self.logger.info(f"Loaded or created collection: {self.collection_name}")
         except Exception as e:
-            self.logger.error(f"Failed to initialize ChromaDB: {e}")
-            self.collection = None # Ensure collection is None on failure
+            self.logger.error(f"Failed to initialize ChromaDB: {e}", exc_info=True)
+            self.collection = None
             raise
     
     def add_documents(self, chunks: List[Dict[str, Any]]) -> None:
-        """
-        Add document chunks to the vector store.
-        
-        Args:
-            chunks: List of chunk dictionaries with 'text', 'embedding', and 'metadata' keys
-        """
+        """Adds document chunks to the vector store."""
         if not chunks:
             return
-        
         if self.collection is None:
             self.initialize()
         
         self.logger.info(f"Adding {len(chunks)} chunks to vector store")
-        
         try:
-            with Timer(f"Adding {len(chunks)} chunks to vector store"):
-                # Prepare data for ChromaDB
-                ids = []
-                embeddings = []
-                documents = []
-                metadatas = []
-                
+            with Timer(f"Adding {len(chunks)} chunks"):
+                ids, embeddings, documents, metadatas = [], [], [], []
                 for chunk in chunks:
-                    # Generate unique ID
-                    chunk_id = str(uuid.uuid4())
-                    ids.append(chunk_id)
-                    
-                    # Add embedding
+                    ids.append(str(uuid.uuid4()))
                     embedding = chunk.get('embedding', [])
-                    if isinstance(embedding, np.ndarray):
-                        embedding = embedding.tolist()
-                    embeddings.append(embedding)
-                    
-                    # Add document text
+                    embeddings.append(embedding.tolist() if isinstance(embedding, np.ndarray) else embedding)
                     documents.append(chunk.get('text', ''))
-                    
-                    # Add metadata
-                    metadata = chunk.get('metadata', {})
-                    # Convert numpy types to Python types for JSON serialization
-                    metadata = self._serialize_metadata(metadata)
-                    metadatas.append(metadata)
+                    metadatas.append(self._serialize_metadata(chunk.get('metadata', {})))
                 
-                # Add to collection
-                self.collection.add(
-                    ids=ids,
-                    embeddings=embeddings,
-                    documents=documents,
-                    metadatas=metadatas
-                )
-                
+                self.collection.add(ids=ids, embeddings=embeddings, documents=documents, metadatas=metadatas)
                 self.logger.info(f"Successfully added {len(chunks)} chunks")
-                
         except Exception as e:
-            self.logger.error(f"Failed to add documents to vector store: {e}")
+            self.logger.error(f"Failed to add documents to vector store: {e}", exc_info=True)
             raise
-    
+            
+    # --- THIS IS THE MISSING METHOD ---
     def similarity_search(self, query_embedding: np.ndarray, top_k: int = 5) -> List[Dict[str, Any]]:
         """
-        Search for similar documents using query embedding.
-        
-        Args:
-            query_embedding: Query embedding vector
-            top_k: Number of top results to return
-            
-        Returns:
-            List of similar documents with metadata and scores
+        Searches for the top_k most similar documents without a score threshold.
         """
         if self.collection is None:
             self.initialize()
-        
-        if len(query_embedding) == 0:
+        if query_embedding.size == 0:
             return []
         
         try:
-            # Convert numpy array to list
-            if isinstance(query_embedding, np.ndarray):
-                query_embedding = query_embedding.tolist()
-            
-            # Query the collection
             results = self.collection.query(
-                query_embeddings=[query_embedding],
+                query_embeddings=[query_embedding.tolist()],
                 n_results=top_k,
                 include=['documents', 'metadatas', 'distances']
             )
             
-            # Format results
             documents = []
-            if results['documents'] and len(results['documents']) > 0:
+            if results and results['documents']:
                 for i in range(len(results['documents'][0])):
-                    doc = {
+                    documents.append({
                         'text': results['documents'][0][i],
-                        'metadata': results['metadatas'][0][i] if results['metadatas'] else {},
-                        'score': 1 - results['distances'][0][i] if results['distances'] else 0.0  # Convert distance to similarity
-                    }
-                    documents.append(doc)
-            
+                        'metadata': results['metadatas'][0][i],
+                        'score': 1 - results['distances'][0][i] if results.get('distances') else 0.0
+                    })
             return documents
-            
         except Exception as e:
-            self.logger.error(f"Failed to perform similarity search: {e}")
+            self.logger.error(f"Failed to perform similarity search: {e}", exc_info=True)
             return []
-    
-    def similarity_search_with_threshold(self, query_embedding: np.ndarray, top_k: int = 5, 
-                                       score_threshold: float = 0.7) -> List[Dict[str, Any]]:
-        """
-        Search for similar documents with a minimum similarity threshold.
-        
-        Args:
-            query_embedding: Query embedding vector
-            top_k: Number of top results to return
-            score_threshold: Minimum similarity score threshold
-            
-        Returns:
-            List of similar documents above the threshold
-        """
+
+    def similarity_search_with_threshold(self, query_embedding: np.ndarray, top_k: int = 5, score_threshold: float = 0.7) -> List[Dict[str, Any]]:
+        """Searches for similar documents and filters them by a minimum similarity threshold."""
         results = self.similarity_search(query_embedding, top_k)
-        
-        # Filter by threshold
-        filtered_results = [doc for doc in results if doc['score'] >= score_threshold]
-        
-        return filtered_results
+        return [doc for doc in results if doc['score'] >= score_threshold]
     
     def get_collection_stats(self) -> Dict[str, Any]:
-        """Get statistics about the collection."""
+        """Gets statistics about the collection."""
         if self.collection is None:
             self.initialize()
-        
         try:
             count = self.collection.count()
-            return {
-                'collection_name': self.collection_name,
-                'document_count': count,
-                'distance_metric': self.distance_metric
-            }
+            return {'collection_name': self.collection_name, 'document_count': count, 'distance_metric': self.distance_metric}
         except Exception as e:
-            self.logger.error(f"Failed to get collection stats: {e}")
+            self.logger.error(f"Failed to get collection stats: {e}", exc_info=True)
             return {}
     
-    def delete_collection(self) -> None:
-        """Delete the entire collection."""
+    def reset_collection(self) -> None:
+        """Resets the collection by deleting and recreating it."""
         if self.client is None:
             self.initialize()
         
         try:
+            self.logger.info(f"Resetting collection: {self.collection_name}")
             self.client.delete_collection(name=self.collection_name)
-            self.collection = None
-            self.logger.info(f"Deleted collection: {self.collection_name}")
-        except Exception as e:
-            self.logger.error(f"Failed to delete collection: {e}")
-    
-    def reset_collection(self) -> None:
-        """Reset the collection (delete and recreate)."""
-        try:
-            self.delete_collection()
-            self.initialize()
-            self.logger.info(f"Reset collection: {self.collection_name}")
-        except Exception as e:
-            self.logger.error(f"Failed to reset collection: {e}")
+            self.collection = self.client.create_collection(
+                name=self.collection_name,
+                metadata={"hnsw:space": self.distance_metric}
+            )
+            self.logger.info(f"Collection '{self.collection_name}' reset successfully.")
+        except Exception:
+            try:
+                self.collection = self.client.get_or_create_collection(
+                    name=self.collection_name,
+                    metadata={"hnsw:space": self.distance_metric}
+                )
+                self.logger.info(f"Collection '{self.collection_name}' ensured to exist after reset attempt.")
+            except Exception as final_e:
+                self.logger.error(f"Failed to reset or create collection: {final_e}", exc_info=True)
+                self.collection = None
+                raise
     
     def _serialize_metadata(self, metadata: Dict[str, Any]) -> Dict[str, Any]:
-        """Convert metadata to JSON-serializable format."""
+        """Converts metadata to a JSON-serializable format."""
         serialized = {}
-        
         for key, value in metadata.items():
             if isinstance(value, np.integer):
                 serialized[key] = int(value)
@@ -235,50 +159,6 @@ class VectorStore:
                 serialized[key] = float(value)
             elif isinstance(value, np.ndarray):
                 serialized[key] = value.tolist()
-            elif isinstance(value, (list, dict, str, int, float, bool)) or value is None:
-                serialized[key] = value
             else:
-                serialized[key] = str(value)
-        
+                serialized[key] = value
         return serialized
-    
-    def search_by_metadata(self, metadata_filter: Dict[str, Any], limit: int = 10) -> List[Dict[str, Any]]:
-        """
-        Search documents by metadata filters.
-        
-        Args:
-            metadata_filter: Dictionary of metadata filters
-            limit: Maximum number of results
-            
-        Returns:
-            List of matching documents
-        """
-        if self.collection is None:
-            self.initialize()
-        
-        try:
-            # ChromaDB where clause format
-            where_clause = {}
-            for key, value in metadata_filter.items():
-                where_clause[key] = {"$eq": value}
-            
-            results = self.collection.get(
-                where=where_clause,
-                limit=limit,
-                include=['documents', 'metadatas']
-            )
-            
-            documents = []
-            if results['documents']:
-                for i in range(len(results['documents'])):
-                    doc = {
-                        'text': results['documents'][i],
-                        'metadata': results['metadatas'][i] if results['metadatas'] else {}
-                    }
-                    documents.append(doc)
-            
-            return documents
-            
-        except Exception as e:
-            self.logger.error(f"Failed to search by metadata: {e}")
-            return []
