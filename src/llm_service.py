@@ -22,7 +22,8 @@ from .utils import Timer, extract_json_from_text
 
 class LLMService:
     """
-    Service for LLM-based query parsing and decision making with a configurable, sequential fallback chain.
+    Service for LLM-based tasks with a configurable, sequential fallback chain.
+    Supports query parsing, decision making, and question answering.
     """
     
     def __init__(self, config: Dict[str, Any]):
@@ -34,14 +35,11 @@ class LLMService:
         api_config = self.llm_config.get('api', {})
         self.model_sequence = api_config.get('model_sequence', [])
         self.groq_api_key = api_config.get('groq_api_key')
-        self.logger.info(f"Got the API KEY:{self.groq_api_key}")
         self.groq_client = None
         if GROQ_AVAILABLE and self.groq_api_key:
             self.groq_client = Groq(api_key=self.groq_api_key)
             if self.groq_client:
-                self.logger.info("Groq Client Online")
-            else:
-                self.logger.error("Grow not Online")
+                self.logger.info("Groq Client Initialized Successfully.")
         
         # Local Model Configuration
         local_model_config = self.llm_config.get('local_model', {})
@@ -63,12 +61,13 @@ class LLMService:
         self.load_local_model()
 
     def load_local_model(self) -> None:
-        """Loads the local language model and tokenizer for the final LLM fallback."""
+        """Loads the local language model for the final LLM fallback."""
         if not TRANSFORMERS_AVAILABLE or not self.local_model_name:
             self.logger.info("No local model configured or transformers not installed. Skipping load.")
             return
         if self.local_model is not None:
             return
+        
         self.logger.info(f"Loading local fallback LLM model: {self.local_model_name}")
         try:
             with Timer(f"Loading local LLM model {self.local_model_name}"):
@@ -119,19 +118,31 @@ class LLMService:
         self.logger.warning("All LLM attempts failed. Using final rule-based decision maker.")
         return self._fallback_decision_making(query_data, retrieved_contexts)
 
+    def answer_question(self, question: str, contexts: List[Dict[str, Any]]) -> str:
+        """Generates a direct answer to a question using provided context."""
+        self.logger.info(f"Generating answer for question: '{question[:50]}...'")
+        prompt = self._create_qa_prompt(question, contexts)
+
+        answer_data = self._execute_task_with_fallback(
+            prompt=prompt,
+            parse_function=lambda text: {"answer": text.strip()},
+            max_new_tokens=300
+        )
+
+        if answer_data and answer_data.get("answer"):
+            return answer_data["answer"]
+        
+        self.logger.warning("All LLM attempts failed to generate an answer.")
+        return "The information could not be retrieved from the provided documents."
+
     def _execute_task_with_fallback(self, prompt: str, parse_function: Callable, max_new_tokens: int, preferred_model: Optional[str] = None) -> Optional[Dict[str, Any]]:
-        """
-        Core logic to attempt a task with a sequence of models.
-        If a preferred model is given, it's tried first.
-        """
+        """Core logic to attempt a task with a sequence of models."""
         model_run_sequence = list(self.model_sequence)
-        # FIX #1: Corrected typo from `preffered_model` to `preferred_model`
         if preferred_model and preferred_model in model_run_sequence:
             model_run_sequence.remove(preferred_model)
             model_run_sequence.insert(0, preferred_model)
 
         if self.groq_client:
-            # The name `model_run_sequence` was defined above but not used in the original code. Corrected to use it.
             for model_id in model_run_sequence:
                 try:
                     self.logger.info(f"Attempting task with API model: {model_id}")
@@ -146,7 +157,7 @@ class LLMService:
                         else:
                             self.logger.warning(f"Failed to parse response from {model_id}.")
                 except Exception as e:
-                    self.logger.error(f"Error with API model {model_id}: {e}")
+                    self.logger.error(f"Error with API model {model_id}: {e}", exc_info=True)
                 self.logger.warning(f"Attempt with {model_id} failed. Trying next model.")
 
         if self.local_pipeline:
@@ -163,9 +174,9 @@ class LLMService:
                     else:
                         self.logger.warning(f"Failed to parse response from local model.")
             except Exception as e:
-                self.logger.error(f"Error with local model {self.local_model_name}: {e}")
+                self.logger.error(f"Error with local model {self.local_model_name}: {e}", exc_info=True)
         return None
-    
+
     def _generate_response_from_api(self, model_id: str, prompt: str, max_new_tokens: int) -> Optional[str]:
         """Generates a response using the Groq API."""
         try:
@@ -213,7 +224,6 @@ JSON format:
 JSON:
 """
     
-
     def _create_decision_prompt(self, query_data: Dict[str, Any], contexts: List[Dict[str, Any]]) -> str:
         """Creates a prompt for the decision-making task using multi-step reasoning."""
         context_text = ""
@@ -225,11 +235,11 @@ JSON:
 ### REASONING STEPS:
 1.  **Analyze Policy Requirements:** First, carefully read the 'Relevant Policy Clauses' and identify the key conditions for approval. Note any age limits, waiting periods, covered procedures, or specific exclusions.
 2.  **Assess User Information:** Review the 'Query Information' provided. Note which details are present and which are missing (e.g., 'age is null').
-3.  **Compare and Identify Gaps:** Compare the user's information against the policy requirements you identified. Explicitly state any critical information that is missing. For example, if a clause mentions an age limit but the user's age is null, you must note this gap.
+3.  **Compare and Identify Gaps:** Compare the user's information against the policy requirements you identified. Explicitly state any critical information that is missing.
 4.  **Formulate a Conclusion:** Based on your comparison, make a final decision.
     - **APPROVE:** Only if you have all necessary information and the claim clearly meets all policy requirements.
-    - **REJECT:** If the claim clearly violates a policy rule (e.g., age is outside the limit, procedure is explicitly excluded) OR if **critical information is missing** and you cannot verify compliance with the policy.
-5.  **Write Justification:** Your justification must be based on your reasoning. If rejecting due to missing information, you **must state exactly what information is needed.**
+    - **REJECT:** If the claim clearly violates a policy rule OR if critical information is missing and you cannot verify compliance with the policy.
+5.  **Write Justification:** Your justification must be based on your reasoning. If rejecting due to missing information, you MUST state exactly what information is needed.
 
 ---
 ### TASK:
@@ -249,13 +259,37 @@ Payout: ₹[integer amount]
 Justification: [Your clear, step-by-step justification. If rejecting due to missing info, specify what is needed.]
 
 Response:"""
-        
+
+    def _create_qa_prompt(self, question: str, contexts: List[Dict[str, Any]]) -> str:
+        """Creates a prompt for the question answering task."""
+        if not contexts:
+            context_text = "No relevant context found."
+        else:
+            context_text = "\n\n---\n\n".join([ctx.get('text', '') for ctx in contexts])
+
+        return f"""You are an expert assistant specialized in reading and understanding insurance policy documents. Your task is to answer the user's question based *only* on the provided context.
+
+**CONTEXT FROM THE POLICY DOCUMENT:**
+{context_text}
+
+**USER'S QUESTION:**
+{question}
+
+**INSTRUCTIONS:**
+- Answer the question concisely and accurately.
+- Quote or refer to the context directly where possible.
+- If the answer cannot be found in the provided context, you MUST state: "The answer to this question could not be found in the provided document."
+- Do not use any prior knowledge or information outside of the context.
+
+**ANSWER:**
+"""
+
     def _extract_json_from_response(self, response: str) -> Optional[Dict[str, Any]]:
         """Extracts a JSON object from a model's response text."""
         return extract_json_from_text(response)
     
     def _parse_decision_response(self, response: str) -> Optional[Dict[str, Any]]:
-        """Parses the structured decision (Decision, Payout, Justification) from a response."""
+        """Parses the structured decision from a response."""
         try:
             decision_match = re.search(r'Decision:\s*(APPROVED|REJECTED)', response, re.IGNORECASE)
             payout_match = re.search(r'Payout:\s*₹?\s*(\d[\d,]*\d|\d)', response)
@@ -269,22 +303,20 @@ Response:"""
             justification = justification_match.group(1).strip()
             
             return {
-                'decision': decision,
-                'payout': payout,
-                'justification': justification,
-                'raw_response': response
+                'decision': decision, 'payout': payout,
+                'justification': justification, 'raw_response': response
             }
         except Exception as e:
             self.logger.error(f"Error parsing decision response: {e}")
             return None
     
     def _fallback_query_parsing(self, query: str) -> Dict[str, Any]:
-        """Final fallback using rule-based regular expressions for query parsing."""
+        """Final fallback using rule-based regular expressions."""
         self.logger.info("Executing rule-based query parsing.")
         query_lower = query.lower()
         age_match = re.search(r'(\d+)[-\s]*year', query_lower)
         age = int(age_match.group(1)) if age_match else None
-        gender = 'male' if 'male' in query_lower and 'female' not in query_lower else 'female' if 'female' in query_lower else None
+        gender = 'male' if 'male' in query_lower else 'female' if 'female' in query_lower else None
         procedures = ['surgery', 'treatment', 'operation', 'procedure', 'therapy']
         procedure = next((proc for proc in procedures if proc in query_lower), None)
         cities = ['mumbai', 'delhi', 'bangalore', 'pune', 'chennai', 'kolkata', 'hyderabad']
@@ -299,7 +331,7 @@ Response:"""
         }
 
     def _fallback_decision_making(self, query_data: Dict[str, Any], contexts: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """Final fallback using simple business rules for decision making."""
+        """Final fallback using simple business rules."""
         self.logger.info("Executing rule-based decision making.")
         decision = "APPROVED"
         payout = 50000
@@ -308,9 +340,3 @@ Response:"""
         if age and age > 65:
             decision = "REJECTED"
             payout = 0
-            justification = "Age exceeds policy limit of 65 years."
-        
-        return {
-            'decision': decision, 'payout': payout, 'justification': justification,
-            'raw_response': f"Fallback decision: {decision}", 'model_used': 'rule-based-fallback'
-        }
