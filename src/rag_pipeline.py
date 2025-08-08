@@ -1,6 +1,7 @@
 import logging
 import json
 import os
+import asyncio
 from dotenv import load_dotenv
 from typing import Dict, Any, List, Optional
 
@@ -21,22 +22,23 @@ class RAGPipeline:
         # Load base configuration from YAML
         self.config = load_config(config_path)
         
-        # Load .env and inject the API key
+        # Load .env and inject the API keys
         load_dotenv() 
-        groq_api_key = os.environ.get("GROQ_API_KEY")
-
-        if groq_api_key:
-            self.config.setdefault('llm', {}).setdefault('api', {})['groq_api_key'] = groq_api_key
+        groq_api_keys_str = os.environ.get("GROQ_API_KEYS")
+        
+        if groq_api_keys_str:
+            groq_api_keys_list = [key.strip() for key in groq_api_keys_str.split(',')]
+            self.config.setdefault('llm', {}).setdefault('api', {})['groq_api_keys'] = groq_api_keys_list
         
         # Now that config is complete, set up logging
         setup_logging(self.config)
         self.logger = logging.getLogger(__name__)
         
         # Log the result of the key loading
-        if groq_api_key:
-            self.logger.info("GROQ API key successfully loaded from .env file.")
+        if groq_api_keys_str:
+            self.logger.info(f"Successfully loaded {len(groq_api_keys_list)} GROQ API keys.")
         else:
-            self.logger.warning("GROQ_API_KEY not found in .env file. API calls will fail.")
+            self.logger.warning("GROQ_API_KEYS not found in .env file. API calls may fail.")
 
         # Initialize components with the now-complete config
         self.document_processor = DocumentProcessor(self.config)
@@ -46,8 +48,8 @@ class RAGPipeline:
         
         # Retrieval configuration for re-ranking
         self.retrieval_config = self.config.get('retrieval', {})
-        self.candidate_k = self.retrieval_config.get('candidate_k', 25) # For initial retrieval
-        self.top_k = self.retrieval_config.get('top_k', 5) # For final context after re-ranking
+        self.candidate_k = self.retrieval_config.get('candidate_k', 25)
+        self.top_k = self.retrieval_config.get('top_k', 5)
         self.score_threshold = self.retrieval_config.get('score_threshold', 0.3)
         
         self.logger.info("RAG Pipeline with re-ranking initialized")
@@ -59,11 +61,8 @@ class RAGPipeline:
         self.logger.info(f"Starting document indexing for {len(file_paths)} files")
         
         results = {
-            'total_files': len(file_paths),
-            'processed_files': 0,
-            'failed_files': 0,
-            'total_chunks': 0,
-            'errors': []
+            'total_files': len(file_paths), 'processed_files': 0,
+            'failed_files': 0, 'total_chunks': 0, 'errors': []
         }
         
         try:
@@ -77,10 +76,8 @@ class RAGPipeline:
                         chunks = self.document_processor.chunk_text(
                             doc['content'], 
                             metadata={
-                                'file_path': doc['file_path'],
-                                'file_name': doc['file_name'],
-                                'file_type': doc['file_type'],
-                                'file_hash': doc['file_hash']
+                                'file_path': doc['file_path'], 'file_name': doc['file_name'],
+                                'file_type': doc['file_type'], 'file_hash': doc['file_hash']
                             }
                         )
                         all_chunks.extend(chunks)
@@ -107,7 +104,7 @@ class RAGPipeline:
         
         return results
     
-    def query(self, user_query: str, preferred_model: Optional[str] = None) -> Dict[str, Any]:
+    async def query(self, user_query: str, preferred_model: Optional[str] = None) -> Dict[str, Any]:
         """
         Process a user query for the Streamlit App (Decision Making Task) using re-ranking.
         """
@@ -115,27 +112,19 @@ class RAGPipeline:
         
         try:
             with Timer("Decision query processing"):
-                # Step 1: Parse query (this is fast)
-                parsed_query = self.llm_service.parse_query(user_query, preferred_model=preferred_model)
+                # Run parsing and retrieval concurrently to save time
+                parsed_query_task = self.llm_service.parse_query(user_query, preferred_model=preferred_model)
                 
-                # Step 2: Embed query
                 query_embedding = self.embedding_service.encode_single_text(user_query)
-                
-                # Step 3: Initial Retrieval (fetch more candidates)
-                candidate_docs = self.vector_store.similarity_search_with_threshold(
-                    query_embedding, 
-                    top_k=self.candidate_k,
-                    score_threshold=self.score_threshold
-                )
-                
-                # Step 4: Re-rank the candidates to find the best matches
+                candidate_docs = self.vector_store.similarity_search(query_embedding, top_k=self.candidate_k)
                 reranked_docs = self.embedding_service.rerank_documents(user_query, candidate_docs)
-                
-                # Step 5: Select the final, most relevant context
                 final_docs = reranked_docs[:self.top_k]
                 
-                # Step 6: Make decision with the high-quality context
-                decision_result = self.llm_service.make_decision(parsed_query, final_docs, preferred_model=preferred_model)
+                # Wait for the parsing to complete
+                parsed_query = await parsed_query_task
+                
+                # Make the final decision with the best context
+                decision_result = await self.llm_service.make_decision(parsed_query, final_docs, preferred_model=preferred_model)
                 
                 result = {
                     'query': user_query,
@@ -144,14 +133,11 @@ class RAGPipeline:
                     'payout': decision_result.get('payout', 0),
                     'justification': decision_result.get('justification', 'No justification provided'),
                     'retrieved_documents': len(final_docs),
-                    'relevant_clauses': [
-                        {
-                            'text': doc['text'][:200] + '...' if len(doc['text']) > 200 else doc['text'],
-                            'score': doc.get('rerank_score', doc.get('score', 0.0)), # Prefer the more accurate rerank_score
-                            'metadata': doc.get('metadata', {})
-                        }
-                        for doc in final_docs
-                    ],
+                    'relevant_clauses': [{
+                        'text': doc['text'][:200] + '...' if len(doc['text']) > 200 else doc['text'],
+                        'score': doc.get('rerank_score', doc.get('score', 0.0)),
+                        'metadata': doc.get('metadata', {})
+                    } for doc in final_docs],
                     'metadata': {
                         'processing_successful': True,
                         'embedding_dimension': self.embedding_service.get_embedding_dimension(),
@@ -166,39 +152,32 @@ class RAGPipeline:
         except Exception as e:
             self.logger.error(f"Error processing query: {e}", exc_info=True)
             return {
-                'query': user_query,
-                'decision': 'ERROR',
-                'payout': 0,
+                'query': user_query, 'decision': 'ERROR', 'payout': 0,
                 'justification': f'An internal error occurred: {str(e)}',
                 'metadata': { 'processing_successful': False, 'error': str(e) }
             }
 
-    def answer_question(self, question: str) -> str:
+    async def answer_question(self, question: str) -> str:
         """
-        Processes a single question for the API (Question Answering Task) using re-ranking.
+        Asynchronously processes a single question for the API using re-ranking.
         """
         self.logger.info(f"Answering question with re-ranking: '{question}'")
         try:
             query_embedding = self.embedding_service.encode_single_text(question)
             
-            # Step 1: Initial Retrieval (casting a wide net)
-            candidate_chunks = self.vector_store.similarity_search_with_threshold(
+            # Use non-thresholded search to cast a wide net for the re-ranker
+            candidate_chunks = self.vector_store.similarity_search(
                 query_embedding, 
-                top_k=self.candidate_k,
-                score_threshold=self.score_threshold 
+                top_k=self.candidate_k
             )
             
             if not candidate_chunks:
                 return "The answer to this question could not be found in the provided document."
 
-            # Step 2: Re-ranking (finding the best matches)
             reranked_chunks = self.embedding_service.rerank_documents(question, candidate_chunks)
-
-            # Step 3: Select the final top_k documents to send to the LLM
             final_context = reranked_chunks[:self.top_k]
             
-            # Step 4: Generate the answer using the high-quality, re-ranked context
-            answer = self.llm_service.answer_question(question, final_context)
+            answer = await self.llm_service.answer_question(question, final_context)
             return answer
 
         except Exception as e:
@@ -262,11 +241,8 @@ class RAGPipeline:
             self.logger.error(f"Error resetting index: {e}")
             return {'status': 'error', 'message': f'Failed to reset index: {str(e)}'}
     
-    def batch_query(self, queries: List[str]) -> List[Dict[str, Any]]:
-        """Process multiple queries in batch."""
-        results = []
-        for i, query in enumerate(queries):
-            self.logger.info(f"Processing batch query {i+1}/{len(queries)}")
-            result = self.query(query)
-            results.append(result)
+    async def batch_query(self, queries: List[str]) -> List[Dict[str, Any]]:
+        """Process multiple queries in batch concurrently."""
+        tasks = [self.query(q) for q in queries]
+        results = await asyncio.gather(*tasks)
         return results

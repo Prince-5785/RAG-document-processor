@@ -1,64 +1,59 @@
 # LLM-Powered Document Processing System Configuration
 
-# Embedding Model Configuration
 embedding:
   model_name: "sentence-transformers/all-MiniLM-L6-v2"
-  device: "cpu"  # Change to "cuda" if GPU available
+  device: "cpu"
   batch_size: 32
   reranker:
-    model_name: "cross-encoder/ms-marco-MiniLM-L-6-v2" # A lightweight but powerful cross-encoder
+    # THIS IS THE CRITICAL FIX: The model name must have the 'cross-encoder/' prefix
+    model_name: "cross-encoder/ms-marco-MiniLM-L-6-v2"
     device: "cpu"
-# LLM Configuration
+
 llm:
-  # This 'api' section is new and crucial
   api:
-    # The actual key will be injected from .env by the pipeline
+    # The actual keys will be injected from .env by the pipeline
     model_sequence:
-      - 'meta-llama/llama-4-maverick-17b-128e-instruct'
       - 'llama-3.3-70b-versatile'
+      - 'meta-llama/llama-4-maverick-17b-128e-instruct'
       - 'gemma2-9b-it'
       - 'llama-3.1-8b-instant'
+    retries:
+      max_attempts: 5
+      initial_delay: 1.0
+      max_delay: 10.0
   
   local_model:
-    model_name: null # Set to a model name like 'gemma:2b' for local fallback
+    model_name: null
     device: "cpu"
 
   generation_params:
-    temperature: 0.5
+    temperature: 0.1
     top_p: 0.9
     max_new_tokens_parsing: 250
     max_new_tokens_decision: 500
 
-# Document Processing
 document_processing:
   chunk_size: 1000
-  chunk_overlap: 200
-  separators: ["\n\n", "\n", " ", ""]
-  
-# Vector Store Configuration
+  chunk_overlap: 300 # Increased for better context in chunks
+
 vector_store:
   persist_directory: "./data/chroma_index"
   collection_name: "insurance_documents"
   distance_metric: "cosine"
   
-# Retrieval Configuration
 retrieval:
-  candidate_k: 25
-  top_k: 5
+  candidate_k: 25 # Number of initial candidates for the re-ranker
+  top_k: 5       # Final number of documents to send to the LLM
   score_threshold: 0.3
   
-# UI Configuration (This was missing)
 ui:
   title: "CodersHub Insurance Query Solver"
-  max_file_size: 200  # MB
   supported_formats: ["pdf", "docx", "eml", "txt"]
   
-# Logging
 logging:
   level: "INFO"
   format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
   
-# Cache Configuration
 cache:
   enable_embedding_cache: true
   cache_directory: "./data/cache"

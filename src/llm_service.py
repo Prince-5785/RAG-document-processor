@@ -1,10 +1,12 @@
 import json
 import logging
 import re
-from typing import Dict, Any, List, Optional, Union, Callable
+import asyncio
+import random
+from typing import Dict, Any, List, Optional, Callable
 
 try:
-    from groq import Groq, APIError
+    from groq import Groq, APIError, AsyncGroq, RateLimitError
     GROQ_AVAILABLE = True
 except ImportError:
     GROQ_AVAILABLE = False
@@ -22,8 +24,7 @@ from .utils import Timer, extract_json_from_text
 
 class LLMService:
     """
-    Service for LLM-based tasks with a configurable, sequential fallback chain.
-    Supports query parsing, decision making, and question answering.
+    Service for LLM-based tasks with key rotation, exponential backoff, and a fallback chain.
     """
     
     def __init__(self, config: Dict[str, Any]):
@@ -31,29 +32,29 @@ class LLMService:
         self.llm_config = config.get('llm', {})
         self.logger = logging.getLogger(__name__)
 
-        # API Configuration
         api_config = self.llm_config.get('api', {})
         self.model_sequence = api_config.get('model_sequence', [])
-        self.groq_api_key = api_config.get('groq_api_key')
-        self.groq_client = None
-        if GROQ_AVAILABLE and self.groq_api_key:
-            self.groq_client = Groq(api_key=self.groq_api_key)
-            if self.groq_client:
-                self.logger.info("Groq Client Initialized Successfully.")
         
-        # Local Model Configuration
+        self.groq_api_keys = api_config.get('groq_api_keys', [])
+        self.key_index = 0
+        if not self.groq_api_keys:
+            self.logger.warning("No Groq API keys found in configuration. API calls will fail.")
+
+        retry_config = api_config.get('retries', {})
+        self.max_attempts = retry_config.get('max_attempts', 5)
+        self.initial_delay = retry_config.get('initial_delay', 1.0)
+        self.max_delay = retry_config.get('max_delay', 10.0)
+        
         local_model_config = self.llm_config.get('local_model', {})
         self.local_model_name = local_model_config.get('model_name')
         self.device = local_model_config.get('device', 'cpu')
 
-        # Generation Parameters
         gen_params = self.llm_config.get('generation_params', {})
         self.temperature = gen_params.get('temperature', 0.1)
         self.top_p = gen_params.get('top_p', 0.9)
         self.max_tokens_parsing = gen_params.get('max_new_tokens_parsing', 250)
         self.max_tokens_decision = gen_params.get('max_new_tokens_decision', 500)
 
-        # Initialize local model attributes
         self.local_model = None
         self.local_tokenizer = None
         self.local_pipeline = None
@@ -88,11 +89,11 @@ class LLMService:
             self.logger.error(f"Failed to load local LLM model: {e}")
             self.local_pipeline = None
 
-    def parse_query(self, query: str, preferred_model: Optional[str] = None) -> Dict[str, Any]:
-        """Parses a user query using the sequential fallback chain."""
+    async def parse_query(self, query: str, preferred_model: Optional[str] = None) -> Dict[str, Any]:
+        """Asynchronously parses a user query using the sequential fallback chain."""
         self.logger.info(f"Starting query parsing for: '{query[:50]}...'")
         prompt = self._create_query_parsing_prompt(query)
-        parsed_data = self._execute_task_with_fallback(
+        parsed_data = await self._execute_task_with_fallback(
             prompt=prompt,
             parse_function=self._extract_json_from_response,
             max_new_tokens=self.max_tokens_parsing,
@@ -103,11 +104,11 @@ class LLMService:
         self.logger.warning("All LLM attempts failed. Using final rule-based parser.")
         return self._fallback_query_parsing(query)
 
-    def make_decision(self, query_data: Dict[str, Any], retrieved_contexts: List[Dict[str, Any]], preferred_model: Optional[str] = None) -> Dict[str, Any]:
-        """Makes an insurance decision using the sequential fallback chain."""
+    async def make_decision(self, query_data: Dict[str, Any], retrieved_contexts: List[Dict[str, Any]], preferred_model: Optional[str] = None) -> Dict[str, Any]:
+        """Asynchronously makes an insurance decision using the sequential fallback chain."""
         self.logger.info("Starting decision making process.")
         prompt = self._create_decision_prompt(query_data, retrieved_contexts)
-        decision_data = self._execute_task_with_fallback(
+        decision_data = await self._execute_task_with_fallback(
             prompt=prompt,
             parse_function=self._parse_decision_response,
             max_new_tokens=self.max_tokens_decision,
@@ -118,15 +119,16 @@ class LLMService:
         self.logger.warning("All LLM attempts failed. Using final rule-based decision maker.")
         return self._fallback_decision_making(query_data, retrieved_contexts)
 
-    def answer_question(self, question: str, contexts: List[Dict[str, Any]]) -> str:
-        """Generates a direct answer to a question using provided context."""
+    async def answer_question(self, question: str, contexts: List[Dict[str, Any]]) -> str:
+        """Asynchronously generates a direct answer to a question using provided context."""
         self.logger.info(f"Generating answer for question: '{question[:50]}...'")
         prompt = self._create_qa_prompt(question, contexts)
 
-        answer_data = self._execute_task_with_fallback(
+        answer_data = await self._execute_task_with_fallback(
             prompt=prompt,
             parse_function=lambda text: {"answer": text.strip()},
-            max_new_tokens=300
+            max_new_tokens=300,
+            # preferred_model="llama-3.1-8b-instant"
         )
 
         if answer_data and answer_data.get("answer"):
@@ -135,65 +137,83 @@ class LLMService:
         self.logger.warning("All LLM attempts failed to generate an answer.")
         return "The information could not be retrieved from the provided documents."
 
-    def _execute_task_with_fallback(self, prompt: str, parse_function: Callable, max_new_tokens: int, preferred_model: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    async def _execute_task_with_fallback(self, prompt: str, parse_function: Callable, max_new_tokens: int, preferred_model: Optional[str] = None) -> Optional[Dict[str, Any]]:
         """Core logic to attempt a task with a sequence of models."""
         model_run_sequence = list(self.model_sequence)
         if preferred_model and preferred_model in model_run_sequence:
             model_run_sequence.remove(preferred_model)
             model_run_sequence.insert(0, preferred_model)
 
-        if self.groq_client:
-            for model_id in model_run_sequence:
-                try:
-                    self.logger.info(f"Attempting task with API model: {model_id}")
-                    response_text = self._generate_response_from_api(model_id, prompt, max_new_tokens)
-                    if response_text:
-                        parsed_result = parse_function(response_text)
-                        if parsed_result:
-                            self.logger.info(f"Success with API model: {model_id}")
-                            if isinstance(parsed_result, dict):
-                                parsed_result['model_used'] = model_id
-                            return parsed_result
-                        else:
-                            self.logger.warning(f"Failed to parse response from {model_id}.")
-                except Exception as e:
-                    self.logger.error(f"Error with API model {model_id}: {e}", exc_info=True)
-                self.logger.warning(f"Attempt with {model_id} failed. Trying next model.")
+        for model_id in model_run_sequence:
+            response_text = await self._generate_response_from_api(model_id, prompt, max_new_tokens)
+            if response_text:
+                parsed_result = parse_function(response_text)
+                if parsed_result:
+                    self.logger.info(f"Success with API model: {model_id}")
+                    if isinstance(parsed_result, dict):
+                        parsed_result['model_used'] = model_id
+                    return parsed_result
+                else:
+                    self.logger.warning(f"Failed to parse response from {model_id}.")
+            self.logger.warning(f"Attempt with {model_id} failed. Trying next model.")
 
         if self.local_pipeline:
-            try:
-                self.logger.info(f"API models failed. Attempting task with local model: {self.local_model_name}")
-                local_response = self._generate_response_from_local(prompt, max_new_tokens)
-                if local_response:
-                    parsed_result = parse_function(local_response)
-                    if parsed_result:
-                        self.logger.info(f"Success with local model: {self.local_model_name}")
-                        if isinstance(parsed_result, dict):
-                            parsed_result['model_used'] = self.local_model_name
-                        return parsed_result
-                    else:
-                        self.logger.warning(f"Failed to parse response from local model.")
-            except Exception as e:
-                self.logger.error(f"Error with local model {self.local_model_name}: {e}", exc_info=True)
+            loop = asyncio.get_running_loop()
+            local_response = await loop.run_in_executor(
+                None, self._generate_response_from_local, prompt, max_new_tokens
+            )
+            if local_response:
+                parsed_result = parse_function(local_response)
+                if parsed_result:
+                    self.logger.info(f"Success with local model: {self.local_model_name}")
+                    if isinstance(parsed_result, dict):
+                        parsed_result['model_used'] = self.local_model_name
+                    return parsed_result
         return None
 
-    def _generate_response_from_api(self, model_id: str, prompt: str, max_new_tokens: int) -> Optional[str]:
-        """Generates a response using the Groq API."""
-        try:
-            chat_completion = self.groq_client.chat.completions.create(
-                messages=[{"role": "user", "content": prompt}],
-                model=model_id,
-                temperature=self.temperature,
-                max_tokens=max_new_tokens,
-                top_p=self.top_p,
-            )
-            return chat_completion.choices[0].message.content
-        except APIError as e:
-            self.logger.error(f"Groq API Error for model {model_id}: {e}")
+    def _get_next_api_key(self) -> Optional[str]:
+        """Rotates through the list of API keys."""
+        if not self.groq_api_keys:
             return None
+        key = self.groq_api_keys[self.key_index]
+        self.key_index = (self.key_index + 1) % len(self.groq_api_keys)
+        return key
+
+    async def _generate_response_from_api(self, model_id: str, prompt: str, max_new_tokens: int) -> Optional[str]:
+        """Asynchronously generates a response using Groq API with key rotation and exponential backoff."""
+        for attempt in range(self.max_attempts):
+            api_key = self._get_next_api_key()
+            if not api_key:
+                self.logger.error("No API keys available to make a request.")
+                return None
+            
+            try:
+                async_client = AsyncGroq(api_key=api_key)
+                chat_completion = await async_client.chat.completions.create(
+                    messages=[{"role": "user", "content": prompt}],
+                    model=model_id,
+                    temperature=self.temperature,
+                    max_tokens=max_new_tokens,
+                    top_p=self.top_p,
+                )
+                return chat_completion.choices[0].message.content
+            except (RateLimitError, APIError) as e:
+                self.logger.warning(f"API Error (attempt {attempt + 1}/{self.max_attempts}) with key index {self.key_index}: {e}")
+            except Exception as e:
+                self.logger.error(f"Unexpected error on attempt {attempt + 1}: {e}", exc_info=True)
+
+            if attempt < self.max_attempts - 1:
+                delay = min(self.initial_delay * (2 ** attempt), self.max_delay)
+                jitter = delay * random.uniform(0.1, 0.5)
+                wait_time = delay + jitter
+                self.logger.info(f"Retrying in {wait_time:.2f} seconds...")
+                await asyncio.sleep(wait_time)
+        
+        self.logger.error(f"API request failed after {self.max_attempts} attempts for model {model_id}.")
+        return None
 
     def _generate_response_from_local(self, prompt: str, max_new_tokens: int) -> Optional[str]:
-        """Generates a response using the local Hugging Face pipeline."""
+        """Generates a response using the local Hugging Face pipeline (synchronous)."""
         if not self.local_pipeline: return None
         outputs = self.local_pipeline(
             prompt,
@@ -213,12 +233,8 @@ Query: "{query}"
 
 JSON format:
 {{
-  "age": <integer or null>,
-  "gender": "<male/female/null>",
-  "procedure": "<medical procedure or null>",
-  "location": "<city/location or null>",
-  "policy_duration_months": <integer or null>,
-  "policy_type": "<policy type or null>"
+  "age": <integer or null>, "gender": "<male/female/null>", "procedure": "<medical procedure or null>",
+  "location": "<city/location or null>", "policy_duration_months": <integer or null>, "policy_type": "<policy type or null>"
 }}
 
 JSON:
@@ -233,12 +249,12 @@ JSON:
         return f"""You are a senior insurance claims processor. Your task is to meticulously evaluate an insurance claim based on the provided information and policy clauses. You must follow a strict reasoning process.
 
 ### REASONING STEPS:
-1.  **Analyze Policy Requirements:** First, carefully read the 'Relevant Policy Clauses' and identify the key conditions for approval. Note any age limits, waiting periods, covered procedures, or specific exclusions.
-2.  **Assess User Information:** Review the 'Query Information' provided. Note which details are present and which are missing (e.g., 'age is null').
-3.  **Compare and Identify Gaps:** Compare the user's information against the policy requirements you identified. Explicitly state any critical information that is missing.
+1.  **Analyze Policy Requirements:** First, carefully read the 'Relevant Policy Clauses' and identify the key conditions for approval.
+2.  **Assess User Information:** Review the 'Query Information' provided. Note which details are present and which are missing.
+3.  **Compare and Identify Gaps:** Compare the user's information against the policy requirements. Explicitly state any critical information that is missing.
 4.  **Formulate a Conclusion:** Based on your comparison, make a final decision.
     - **APPROVE:** Only if you have all necessary information and the claim clearly meets all policy requirements.
-    - **REJECT:** If the claim clearly violates a policy rule OR if critical information is missing and you cannot verify compliance with the policy.
+    - **REJECT:** If the claim clearly violates a policy rule OR if critical information is missing.
 5.  **Write Justification:** Your justification must be based on your reasoning. If rejecting due to missing information, you MUST state exactly what information is needed.
 
 ---
@@ -252,11 +268,11 @@ JSON:
 
 ---
 ### FINAL OUTPUT:
-Provide your response strictly in the following format. Do not add any other text or explanations.
+Provide your response strictly in the following format.
 
 Decision: [APPROVED/REJECTED]
 Payout: ₹[integer amount]
-Justification: [Your clear, step-by-step justification. If rejecting due to missing info, specify what is needed.]
+Justification: [Your clear, step-by-step justification.]
 
 Response:"""
 
@@ -276,10 +292,9 @@ Response:"""
 {question}
 
 **INSTRUCTIONS:**
-- Answer the question concisely and accurately.
-- Quote or refer to the context directly where possible.
-- If the answer cannot be found in the provided context, you MUST state: "The answer to this question could not be found in the provided document."
-- Do not use any prior knowledge or information outside of the context.
+- Answer concisely and accurately.
+- If the answer cannot be found in the context, you MUST state: "The answer to this question could not be found in the provided document."
+- Do not use any prior knowledge.
 
 **ANSWER:**
 """
@@ -340,3 +355,9 @@ Response:"""
         if age and age > 65:
             decision = "REJECTED"
             payout = 0
+            justification = "Age exceeds policy limit of 65 years."
+        
+        return {
+            'decision': decision, 'payout': payout, 'justification': justification,
+            'raw_response': f"Fallback decision: {decision}", 'model_used': 'rule-based-fallback'
+        }

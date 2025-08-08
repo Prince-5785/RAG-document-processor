@@ -1,7 +1,3 @@
-"""
-Vector store implementation using ChromaDB for storing and retrieving document embeddings.
-"""
-
 import os
 import logging
 import uuid
@@ -39,44 +35,36 @@ class VectorStore:
         """Initializes the ChromaDB client and gets or creates the collection."""
         if not CHROMADB_AVAILABLE:
             raise ImportError("ChromaDB not available")
-        
-        # This check prevents re-initializing if it's already done.
         if self.collection is not None:
             return
         
         self.logger.info("Initializing ChromaDB vector store")
-        
         try:
             self.client = chromadb.PersistentClient(
                 path=self.persist_directory,
                 settings=Settings(anonymized_telemetry=False)
             )
-            
             self.collection = self.client.get_or_create_collection(
                 name=self.collection_name,
                 metadata={"hnsw:space": self.distance_metric}
             )
             self.logger.info(f"Loaded or created collection: {self.collection_name}")
-                
         except Exception as e:
             self.logger.error(f"Failed to initialize ChromaDB: {e}", exc_info=True)
-            self.collection = None # Ensure collection is None on failure
+            self.collection = None
             raise
     
     def add_documents(self, chunks: List[Dict[str, Any]]) -> None:
         """Adds document chunks to the vector store."""
         if not chunks:
             return
-        
         if self.collection is None:
             self.initialize()
         
         self.logger.info(f"Adding {len(chunks)} chunks to vector store")
-        
         try:
-            with Timer(f"Adding {len(chunks)} chunks to vector store"):
+            with Timer(f"Adding {len(chunks)} chunks"):
                 ids, embeddings, documents, metadatas = [], [], [], []
-                
                 for chunk in chunks:
                     ids.append(str(uuid.uuid4()))
                     embedding = chunk.get('embedding', [])
@@ -84,23 +72,19 @@ class VectorStore:
                     documents.append(chunk.get('text', ''))
                     metadatas.append(self._serialize_metadata(chunk.get('metadata', {})))
                 
-                self.collection.add(
-                    ids=ids,
-                    embeddings=embeddings,
-                    documents=documents,
-                    metadatas=metadatas
-                )
+                self.collection.add(ids=ids, embeddings=embeddings, documents=documents, metadatas=metadatas)
                 self.logger.info(f"Successfully added {len(chunks)} chunks")
-                
         except Exception as e:
             self.logger.error(f"Failed to add documents to vector store: {e}", exc_info=True)
             raise
-    
-    def similarity_search_with_threshold(self, query_embedding: np.ndarray, top_k: int = 5, score_threshold: float = 0.7) -> List[Dict[str, Any]]:
-        """Searches for similar documents with a minimum similarity threshold."""
+            
+    # --- THIS IS THE MISSING METHOD ---
+    def similarity_search(self, query_embedding: np.ndarray, top_k: int = 5) -> List[Dict[str, Any]]:
+        """
+        Searches for the top_k most similar documents without a score threshold.
+        """
         if self.collection is None:
             self.initialize()
-        
         if query_embedding.size == 0:
             return []
         
@@ -114,32 +98,28 @@ class VectorStore:
             documents = []
             if results and results['documents']:
                 for i in range(len(results['documents'][0])):
-                    # Convert distance to similarity score (1 - distance for cosine)
-                    score = 1 - results['distances'][0][i]
-                    if score >= score_threshold:
-                        documents.append({
-                            'text': results['documents'][0][i],
-                            'metadata': results['metadatas'][0][i],
-                            'score': score
-                        })
+                    documents.append({
+                        'text': results['documents'][0][i],
+                        'metadata': results['metadatas'][0][i],
+                        'score': 1 - results['distances'][0][i] if results.get('distances') else 0.0
+                    })
             return documents
-            
         except Exception as e:
             self.logger.error(f"Failed to perform similarity search: {e}", exc_info=True)
             return []
+
+    def similarity_search_with_threshold(self, query_embedding: np.ndarray, top_k: int = 5, score_threshold: float = 0.7) -> List[Dict[str, Any]]:
+        """Searches for similar documents and filters them by a minimum similarity threshold."""
+        results = self.similarity_search(query_embedding, top_k)
+        return [doc for doc in results if doc['score'] >= score_threshold]
     
     def get_collection_stats(self) -> Dict[str, Any]:
         """Gets statistics about the collection."""
         if self.collection is None:
             self.initialize()
-        
         try:
             count = self.collection.count()
-            return {
-                'collection_name': self.collection_name,
-                'document_count': count,
-                'distance_metric': self.distance_metric
-            }
+            return {'collection_name': self.collection_name, 'document_count': count, 'distance_metric': self.distance_metric}
         except Exception as e:
             self.logger.error(f"Failed to get collection stats: {e}", exc_info=True)
             return {}
@@ -151,17 +131,13 @@ class VectorStore:
         
         try:
             self.logger.info(f"Resetting collection: {self.collection_name}")
-            # Delete the collection if it exists
             self.client.delete_collection(name=self.collection_name)
-            
-            # Immediately recreate it and assign to self.collection
             self.collection = self.client.create_collection(
                 name=self.collection_name,
                 metadata={"hnsw:space": self.distance_metric}
             )
             self.logger.info(f"Collection '{self.collection_name}' reset successfully.")
-        except Exception as e:
-            # If there's an error (e.g., collection didn't exist to delete), try get_or_create as a fallback
+        except Exception:
             try:
                 self.collection = self.client.get_or_create_collection(
                     name=self.collection_name,
@@ -170,7 +146,7 @@ class VectorStore:
                 self.logger.info(f"Collection '{self.collection_name}' ensured to exist after reset attempt.")
             except Exception as final_e:
                 self.logger.error(f"Failed to reset or create collection: {final_e}", exc_info=True)
-                self.collection = None # Ensure collection is None on failure
+                self.collection = None
                 raise
     
     def _serialize_metadata(self, metadata: Dict[str, Any]) -> Dict[str, Any]:
