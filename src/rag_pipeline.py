@@ -12,7 +12,7 @@ from .utils import Timer, load_config, setup_logging
 
 
 class RAGPipeline:
-    """Main pipeline for Retrieval-Augmented Generation."""
+    """Main pipeline for Retrieval-Augmented Generation with a retrieve-and-rerank strategy."""
     
     def __init__(self, config_path: str = "config/config.yaml"):
         """
@@ -44,12 +44,13 @@ class RAGPipeline:
         self.vector_store = VectorStore(self.config)
         self.llm_service = LLMService(self.config)
         
-        # Retrieval configuration
+        # Retrieval configuration for re-ranking
         self.retrieval_config = self.config.get('retrieval', {})
-        self.top_k = self.retrieval_config.get('top_k', 5)
-        self.score_threshold = self.retrieval_config.get('score_threshold', 0.7)
+        self.candidate_k = self.retrieval_config.get('candidate_k', 25) # For initial retrieval
+        self.top_k = self.retrieval_config.get('top_k', 5) # For final context after re-ranking
+        self.score_threshold = self.retrieval_config.get('score_threshold', 0.3)
         
-        self.logger.info("RAG Pipeline initialized")
+        self.logger.info("RAG Pipeline with re-ranking initialized")
     
     def index_documents(self, file_paths: List[str]) -> Dict[str, Any]:
         """
@@ -108,20 +109,33 @@ class RAGPipeline:
     
     def query(self, user_query: str, preferred_model: Optional[str] = None) -> Dict[str, Any]:
         """
-        Process a user query for the Streamlit App (Decision Making Task).
+        Process a user query for the Streamlit App (Decision Making Task) using re-ranking.
         """
-        self.logger.info(f"Processing decision query: '{user_query}' with preferred_model: {preferred_model}")
+        self.logger.info(f"Processing decision query with re-ranking: '{user_query}'")
         
         try:
             with Timer("Decision query processing"):
+                # Step 1: Parse query (this is fast)
                 parsed_query = self.llm_service.parse_query(user_query, preferred_model=preferred_model)
+                
+                # Step 2: Embed query
                 query_embedding = self.embedding_service.encode_single_text(user_query)
-                retrieved_docs = self.vector_store.similarity_search_with_threshold(
+                
+                # Step 3: Initial Retrieval (fetch more candidates)
+                candidate_docs = self.vector_store.similarity_search_with_threshold(
                     query_embedding, 
-                    top_k=self.top_k,
+                    top_k=self.candidate_k,
                     score_threshold=self.score_threshold
                 )
-                decision_result = self.llm_service.make_decision(parsed_query, retrieved_docs, preferred_model=preferred_model)
+                
+                # Step 4: Re-rank the candidates to find the best matches
+                reranked_docs = self.embedding_service.rerank_documents(user_query, candidate_docs)
+                
+                # Step 5: Select the final, most relevant context
+                final_docs = reranked_docs[:self.top_k]
+                
+                # Step 6: Make decision with the high-quality context
+                decision_result = self.llm_service.make_decision(parsed_query, final_docs, preferred_model=preferred_model)
                 
                 result = {
                     'query': user_query,
@@ -129,19 +143,19 @@ class RAGPipeline:
                     'decision': decision_result.get('decision', 'REJECTED'),
                     'payout': decision_result.get('payout', 0),
                     'justification': decision_result.get('justification', 'No justification provided'),
-                    'retrieved_documents': len(retrieved_docs),
+                    'retrieved_documents': len(final_docs),
                     'relevant_clauses': [
                         {
                             'text': doc['text'][:200] + '...' if len(doc['text']) > 200 else doc['text'],
-                            'score': doc['score'],
+                            'score': doc.get('rerank_score', doc.get('score', 0.0)), # Prefer the more accurate rerank_score
                             'metadata': doc.get('metadata', {})
                         }
-                        for doc in retrieved_docs
+                        for doc in final_docs
                     ],
                     'metadata': {
                         'processing_successful': True,
                         'embedding_dimension': self.embedding_service.get_embedding_dimension(),
-                        'retrieval_threshold': self.score_threshold
+                        'retrieval_candidates': len(candidate_docs)
                     }
                 }
                 
@@ -161,20 +175,30 @@ class RAGPipeline:
 
     def answer_question(self, question: str) -> str:
         """
-        Processes a single question for the API (Question Answering Task).
+        Processes a single question for the API (Question Answering Task) using re-ranking.
         """
-        self.logger.info(f"Answering question: '{question}'")
+        self.logger.info(f"Answering question with re-ranking: '{question}'")
         try:
             query_embedding = self.embedding_service.encode_single_text(question)
             
-            # Use a slightly lower threshold for QA to gather more context
-            retrieved_chunks = self.vector_store.similarity_search_with_threshold(
+            # Step 1: Initial Retrieval (casting a wide net)
+            candidate_chunks = self.vector_store.similarity_search_with_threshold(
                 query_embedding, 
-                top_k=self.top_k,
-                score_threshold=0.3 
+                top_k=self.candidate_k,
+                score_threshold=self.score_threshold 
             )
             
-            answer = self.llm_service.answer_question(question, retrieved_chunks)
+            if not candidate_chunks:
+                return "The answer to this question could not be found in the provided document."
+
+            # Step 2: Re-ranking (finding the best matches)
+            reranked_chunks = self.embedding_service.rerank_documents(question, candidate_chunks)
+
+            # Step 3: Select the final top_k documents to send to the LLM
+            final_context = reranked_chunks[:self.top_k]
+            
+            # Step 4: Generate the answer using the high-quality, re-ranked context
+            answer = self.llm_service.answer_question(question, final_context)
             return answer
 
         except Exception as e:
@@ -203,7 +227,7 @@ class RAGPipeline:
             'processing_metadata': {
                 'timestamp': None,
                 'model_version': '1.0.0',
-                'retrieval_method': 'semantic_similarity',
+                'retrieval_method': 'semantic_search_with_reranking',
                 'documents_retrieved': result.get('retrieved_documents', 0)
             }
         }
@@ -220,6 +244,7 @@ class RAGPipeline:
                 'embedding_service': embedding_info,
                 'configuration': {
                     'top_k': self.top_k,
+                    'candidate_k': self.candidate_k,
                     'score_threshold': self.score_threshold,
                     'supported_formats': self.document_processor.get_supported_formats()
                 }

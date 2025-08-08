@@ -10,7 +10,7 @@ import numpy as np
 from pathlib import Path
 
 try:
-    from sentence_transformers import SentenceTransformer
+    from sentence_transformers import SentenceTransformer, CrossEncoder
     import torch
     SENTENCE_TRANSFORMERS_AVAILABLE = True
 except ImportError:
@@ -26,15 +26,20 @@ class EmbeddingService:
     def __init__(self, config: Dict[str, Any]):
         self.config = config
         self.embedding_config = config.get('embedding', {})
+      
         self.model_name = self.embedding_config.get('model_name', 'sentence-transformers/all-MiniLM-L6-v2')
         self.device = self.embedding_config.get('device', 'cpu')
         self.batch_size = self.embedding_config.get('batch_size', 32)
+        
+        self.reranker_config = self.embedding_config.get('reranker', {})
+        self.reranker_model_name = self.reranker_config.get('model_name')
         
         self.cache_config = config.get('cache', {})
         self.enable_cache = self.cache_config.get('enable_embedding_cache', True)
         self.cache_dir = self.cache_config.get('cache_directory', './data/cache')
         
         self.model = None
+        self.cross_encoder = None
         self.logger = logging.getLogger(__name__)
         
         if self.enable_cache:
@@ -65,7 +70,50 @@ class EmbeddingService:
         except Exception as e:
             self.logger.error(f"Failed to load model {self.model_name}: {e}")
             raise
-    
+  
+    def load_cross_encoder_model(self) -> None:
+        """Loads the cross-encoder model for re-ranking."""
+        if not SENTENCE_TRANSFORMERS_AVAILABLE or not self.reranker_model_name:
+            self.logger.warning("No re-ranker model configured or sentence-transformers not available.")
+            return
+
+        if self.cross_encoder is not None:
+            return
+            
+        self.logger.info(f"Loading re-ranker model: {self.reranker_model_name}")
+        try:
+            with Timer(f"Loading re-ranker model {self.reranker_model_name}"):
+                self.cross_encoder = CrossEncoder(self.reranker_model_name, device=self.device)
+                self.logger.info(f"Re-ranker model loaded successfully on {self.device}")
+        except Exception as e:
+            self.logger.error(f"Failed to load re-ranker model {self.reranker_model_name}: {e}")
+            self.cross_encoder = None
+
+    def rerank_documents(self, query: str, documents: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Re-ranks a list of documents against a query using a cross-encoder."""
+        if not self.cross_encoder:
+            self.load_cross_encoder_model()
+        
+        if not self.cross_encoder or not documents:
+            return documents
+            
+        self.logger.info(f"Re-ranking {len(documents)} documents.")
+        
+        # Create pairs of [query, document_text] for the cross-encoder
+        pairs = [[query, doc['text']] for doc in documents]
+        
+        # Predict scores
+        scores = self.cross_encoder.predict(pairs, show_progress_bar=False)
+        
+        # Assign new scores and sort
+        for doc, score in zip(documents, scores):
+            doc['rerank_score'] = float(score)
+            
+        # Sort documents by the new re-rank score in descending order
+        sorted_documents = sorted(documents, key=lambda x: x['rerank_score'], reverse=True)
+        
+        return sorted_documents
+
     def encode_texts(self, texts: List[str], show_progress: bool = True) -> np.ndarray:
         """
         Generate embeddings for a list of texts.

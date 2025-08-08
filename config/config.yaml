@@ -5,7 +5,9 @@ embedding:
   model_name: "sentence-transformers/all-MiniLM-L6-v2"
   device: "cpu"  # Change to "cuda" if GPU available
   batch_size: 32
-
+  reranker:
+    model_name: "cross-encoder/ms-marco-MiniLM-L-6-v2" # A lightweight but powerful cross-encoder
+    device: "cpu"
 # LLM Configuration
 llm:
   # This 'api' section is new and crucial
@@ -41,8 +43,9 @@ vector_store:
   
 # Retrieval Configuration
 retrieval:
+  candidate_k: 25
   top_k: 5
-  score_threshold: 0.7
+  score_threshold: 0.3
   
 # UI Configuration (This was missing)
 ui:
