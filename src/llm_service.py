@@ -281,9 +281,19 @@ Response:"""
         if not contexts:
             context_text = "No relevant context found."
         else:
-            context_text = "\n\n---\n\n".join([ctx.get('text', '') for ctx in contexts])
+            # Strip any heading markers '===' from contexts to avoid placeholder-like outputs
+            cleaned_ctx = []
+            import re
+            for ctx in contexts:
+                t = ctx.get('text', '')
+                t = re.sub(r"^===\s*[^=]+\s*===\s*$", "", t, flags=re.IGNORECASE | re.MULTILINE).strip()
+                t = t.replace("===", " ")
+                cleaned_ctx.append(t)
+            context_text = "\n\n---\n\n".join(cleaned_ctx)
 
         return f"""You are an expert assistant specialized in reading and understanding insurance policy documents. Your task is to answer the user's question based *only* on the provided context.
+
+Provide a precise answer; include exact numbers, durations, and conditions when present. If relevant, include a brief parenthetical citation with page number if present in metadata, e.g., (Policy p. 12).
 
 **CONTEXT FROM THE POLICY DOCUMENT:**
 {context_text}

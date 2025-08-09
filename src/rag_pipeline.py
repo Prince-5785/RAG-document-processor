@@ -11,6 +11,7 @@ from .vector_store import VectorStore
 from .llm_service import LLMService
 from .utils import Timer, load_config, setup_logging
 from .extractors import extract_answer
+from .context_compressor import ContextCompressor
 
 
 class RAGPipeline:
@@ -46,6 +47,7 @@ class RAGPipeline:
         self.embedding_service = EmbeddingService(self.config)
         self.vector_store = VectorStore(self.config)
         self.llm_service = LLMService(self.config)
+        self.context_compressor = ContextCompressor(self.embedding_service, max_sentences=8, per_doc_max=3)
 
         # Retrieval configuration for re-ranking
         self.retrieval_config = self.config.get('retrieval', {})
@@ -133,7 +135,9 @@ class RAGPipeline:
                 query_embedding = self.embedding_service.encode_single_text(aug_query)
                 candidate_docs = self.vector_store.similarity_search(query_embedding, top_k=self.candidate_k)
                 reranked_docs = self.embedding_service.rerank_documents(user_query, candidate_docs)
-                final_docs = self._select_diverse_topk(user_query, reranked_docs, self.top_k, self.mmrl_lambda)
+                # Compress reranked contexts to reduce tokens while preserving key facts
+                compressed_docs = self.context_compressor.compress(user_query, reranked_docs[: max(self.top_k*3, self.top_k)])
+                final_docs = self._select_diverse_topk(user_query, compressed_docs, self.top_k, self.mmrl_lambda)
 
                 # Wait for the parsing to complete
                 parsed_query = await parsed_query_task
@@ -191,7 +195,8 @@ class RAGPipeline:
                 return "The answer to this question could not be found in the provided document."
 
             reranked_chunks = self.embedding_service.rerank_documents(question, candidate_chunks)
-            final_context = self._select_diverse_topk(question, reranked_chunks, self.top_k, self.mmrl_lambda)
+            compressed_chunks = self.context_compressor.compress(question, reranked_chunks[: max(self.top_k*3, self.top_k)])
+            final_context = self._select_diverse_topk(question, compressed_chunks, self.top_k, self.mmrl_lambda)
 
             # First, try the deterministic extractor for supported question types
             try:
