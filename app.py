@@ -10,6 +10,7 @@ from datetime import datetime
 from typing import List, Dict, Any
 import tempfile
 from pathlib import Path
+import asyncio
 
 # Import our RAG pipeline
 from src.rag_pipeline import RAGPipeline
@@ -325,7 +326,7 @@ def main():
                     preferred_model_arg = selected_model
                 with st.spinner("Processing your query..."):
                     start_time = time.time()
-                    result = st.session_state.pipeline.query(user_query.strip(),preferred_model=preferred_model_arg)
+                    result = asyncio.run(st.session_state.pipeline.query(user_query.strip(), preferred_model=preferred_model_arg))
                     processing_time = time.time() - start_time
                     
                     st.subheader("📋 Query Results")

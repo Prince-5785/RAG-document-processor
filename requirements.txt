@@ -9,7 +9,7 @@ langchain-community>=0.0.20
 chromadb>=0.4.0
 
 # Document processing
-PyPDF2>=3.0.1
+pypdf>=3.0.1
 pdfplumber>=0.9.0
 python-docx>=0.8.11
 python-multipart>=0.0.6

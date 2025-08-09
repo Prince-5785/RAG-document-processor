@@ -5,7 +5,8 @@ Integration tests for the RAG pipeline.
 import pytest
 import tempfile
 import os
-from unittest.mock import Mock, patch
+import asyncio
+from unittest.mock import Mock, patch, AsyncMock
 
 from src.rag_pipeline import RAGPipeline
 
@@ -160,57 +161,67 @@ class TestRAGPipeline:
         assert len(results['errors']) == 2
     
     @patch('src.rag_pipeline.load_config')
-    def test_query_basic(self, mock_load_config, sample_config):
+    @pytest.mark.asyncio
+    async def test_query_basic(self, mock_load_config, sample_config):
         """Test basic query processing."""
         mock_load_config.return_value = sample_config
-        
+
         pipeline = RAGPipeline()
-        
+
         # Mock the components to avoid actual model loading
-        pipeline.llm_service.parse_query = Mock(return_value={
+        pipeline.llm_service.parse_query = AsyncMock(return_value={
             'age': 30,
             'gender': 'male',
             'procedure': 'surgery'
         })
-        
+
         pipeline.embedding_service.encode_single_text = Mock(return_value=[0.1, 0.2, 0.3])
-        
-        pipeline.vector_store.similarity_search_with_threshold = Mock(return_value=[
+
+        pipeline.vector_store.similarity_search = Mock(return_value=[
             {
                 'text': 'Sample policy clause',
                 'score': 0.8,
                 'metadata': {'file_name': 'policy.txt'}
             }
         ])
-        
-        pipeline.llm_service.make_decision = Mock(return_value={
+
+        pipeline.embedding_service.rerank_documents = Mock(return_value=[
+            {
+                'text': 'Sample policy clause',
+                'score': 0.8,
+                'metadata': {'file_name': 'policy.txt'}
+            }
+        ])
+
+        pipeline.llm_service.make_decision = AsyncMock(return_value={
             'decision': 'APPROVED',
             'payout': 50000,
             'justification': 'Claim approved based on policy terms.'
         })
-        
-        result = pipeline.query("30-year-old male needs surgery")
-        
+
+        result = await pipeline.query("30-year-old male needs surgery")
+
         assert result['decision'] == 'APPROVED'
         assert result['payout'] == 50000
         assert 'justification' in result
         assert result['metadata']['processing_successful'] is True
     
     @patch('src.rag_pipeline.load_config')
-    def test_query_with_error(self, mock_load_config, sample_config):
+    @pytest.mark.asyncio
+    async def test_query_with_error(self, mock_load_config, sample_config):
         """Test query processing with error."""
         mock_load_config.return_value = sample_config
-        
+
         pipeline = RAGPipeline()
-        
+
         # Mock an error in LLM service
-        pipeline.llm_service.parse_query = Mock(side_effect=Exception("LLM error"))
-        
-        result = pipeline.query("Test query")
-        
+        pipeline.llm_service.parse_query = AsyncMock(side_effect=Exception("LLM error"))
+
+        result = await pipeline.query("Test query")
+
         assert result['decision'] == 'ERROR'
         assert result['payout'] == 0
-        assert 'Error processing query' in result['justification']
+        assert 'An internal error occurred' in result['justification']
         assert result['metadata']['processing_successful'] is False
     
     @patch('src.rag_pipeline.load_config')
@@ -255,21 +266,22 @@ class TestRAGPipeline:
         pipeline.vector_store.reset_collection.assert_called_once()
     
     @patch('src.rag_pipeline.load_config')
-    def test_batch_query(self, mock_load_config, sample_config):
+    @pytest.mark.asyncio
+    async def test_batch_query(self, mock_load_config, sample_config):
         """Test batch query processing."""
         mock_load_config.return_value = sample_config
-        
+
         pipeline = RAGPipeline()
-        
+
         # Mock the query method
-        pipeline.query = Mock(side_effect=[
+        pipeline.query = AsyncMock(side_effect=[
             {'decision': 'APPROVED', 'payout': 30000},
             {'decision': 'REJECTED', 'payout': 0}
         ])
-        
+
         queries = ["Query 1", "Query 2"]
-        results = pipeline.batch_query(queries)
-        
+        results = await pipeline.batch_query(queries)
+
         assert len(results) == 2
         assert results[0]['decision'] == 'APPROVED'
         assert results[1]['decision'] == 'REJECTED'

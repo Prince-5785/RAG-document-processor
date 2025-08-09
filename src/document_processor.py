@@ -12,12 +12,12 @@ from email.mime.multipart import MIMEMultipart
 
 # PDF processing
 try:
-    import PyPDF2
+    import pypdf
     import pdfplumber
     PDF_AVAILABLE = True
 except ImportError:
     PDF_AVAILABLE = False
-    logging.warning("PDF processing libraries not available. Install PyPDF2 and pdfplumber.")
+    logging.warning("PDF processing libraries not available. Install pypdf and pdfplumber.")
 
 # Word document processing
 try:
@@ -122,12 +122,12 @@ class DocumentProcessor:
                         text_content.append(f"[Page {page_num}]\n{text}")
                         
         except Exception as e:
-            self.logger.warning(f"pdfplumber failed for {file_path}, trying PyPDF2: {e}")
-            
-            # Fallback to PyPDF2
+            self.logger.warning(f"pdfplumber failed for {file_path}, trying pypdf: {e}")
+
+            # Fallback to pypdf
             try:
                 with open(file_path, 'rb') as file:
-                    pdf_reader = PyPDF2.PdfReader(file)
+                    pdf_reader = pypdf.PdfReader(file)
                     for page_num, page in enumerate(pdf_reader.pages, 1):
                         text = page.extract_text()
                         if text:
