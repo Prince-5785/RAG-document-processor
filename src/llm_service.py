@@ -119,7 +119,7 @@ class LLMService:
         self.logger.warning("All LLM attempts failed. Using final rule-based decision maker.")
         return self._fallback_decision_making(query_data, retrieved_contexts)
 
-    async def answer_question(self, question: str, contexts: List[Dict[str, Any]]) -> str:
+    async def answer_question(self, question: str, contexts: List[Dict[str, Any]], preferred_model: Optional[str] = None) -> str:
         """Asynchronously generates a direct answer to a question using provided context."""
         self.logger.info(f"Generating answer for question: '{question[:50]}...'")
         prompt = self._create_qa_prompt(question, contexts)
@@ -128,12 +128,12 @@ class LLMService:
             prompt=prompt,
             parse_function=lambda text: {"answer": text.strip()},
             max_new_tokens=300,
-            # preferred_model="llama-3.1-8b-instant"
+            preferred_model=preferred_model
         )
 
         if answer_data and answer_data.get("answer"):
             return answer_data["answer"]
-        
+
         self.logger.warning("All LLM attempts failed to generate an answer.")
         return "The information could not be retrieved from the provided documents."
 

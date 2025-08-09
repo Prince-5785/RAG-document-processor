@@ -1,6 +1,7 @@
 import os
 import logging
 import uuid
+import json
 from typing import List, Dict, Any, Optional
 import numpy as np
 
@@ -94,13 +95,20 @@ class VectorStore:
                 n_results=top_k,
                 include=['documents', 'metadatas', 'distances']
             )
-            
+
             documents = []
             if results and results['documents']:
                 for i in range(len(results['documents'][0])):
+                    meta = results['metadatas'][0][i] or {}
+                    # Normalize a few keys for later explainability
+                    if 'page_hint' in meta and isinstance(meta['page_hint'], str):
+                        try:
+                            meta['page_hint'] = int(meta['page_hint'])
+                        except Exception:
+                            pass
                     documents.append({
                         'text': results['documents'][0][i],
-                        'metadata': results['metadatas'][0][i],
+                        'metadata': meta,
                         'score': 1 - results['distances'][0][i] if results.get('distances') else 0.0
                     })
             return documents
@@ -150,15 +158,43 @@ class VectorStore:
                 raise
     
     def _serialize_metadata(self, metadata: Dict[str, Any]) -> Dict[str, Any]:
-        """Converts metadata to a JSON-serializable format."""
-        serialized = {}
+        """Convert metadata values to types accepted by Chroma (Bool, Int, Float, Str).
+        - Drops keys with None values (Chroma Rust binding rejects None)
+        - Casts numpy scalars/arrays to Python primitives
+        - Stringifies any unsupported types as a safe fallback
+        """
+        serialized: Dict[str, Any] = {}
         for key, value in metadata.items():
-            if isinstance(value, np.integer):
-                serialized[key] = int(value)
-            elif isinstance(value, np.floating):
-                serialized[key] = float(value)
-            elif isinstance(value, np.ndarray):
-                serialized[key] = value.tolist()
-            else:
-                serialized[key] = value
+            if value is None:
+                # Skip None values entirely to avoid Chroma type errors
+                continue
+            try:
+                if isinstance(value, np.bool_):
+                    serialized[key] = bool(value)
+                elif isinstance(value, (bool,)):
+                    serialized[key] = value
+                elif isinstance(value, np.integer):
+                    serialized[key] = int(value)
+                elif isinstance(value, int):
+                    serialized[key] = value
+                elif isinstance(value, np.floating):
+                    serialized[key] = float(value)
+                elif isinstance(value, float):
+                    serialized[key] = value
+                elif isinstance(value, np.ndarray):
+                    # Not supported directly in metadata; stringify
+                    serialized[key] = json.dumps(value.tolist())
+                elif isinstance(value, (list, dict, tuple)):
+                    # Chroma expects primitive types; stringify complex types
+                    serialized[key] = json.dumps(value)
+                else:
+                    # Assume string-compatible
+                    serialized[key] = str(value)
+            except Exception:
+                # As a last resort, stringify to avoid failing the batch
+                try:
+                    serialized[key] = str(value)
+                except Exception:
+                    # If even str() fails, drop the key
+                    self.logger.warning(f"Dropping unserializable metadata key: {key}")
         return serialized

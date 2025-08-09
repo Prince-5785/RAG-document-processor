@@ -10,30 +10,31 @@ from .embedding_service import EmbeddingService
 from .vector_store import VectorStore
 from .llm_service import LLMService
 from .utils import Timer, load_config, setup_logging
+from .extractors import extract_answer
 
 
 class RAGPipeline:
     """Main pipeline for Retrieval-Augmented Generation with a retrieve-and-rerank strategy."""
-    
+
     def __init__(self, config_path: str = "config/config.yaml"):
         """
         Initialize the RAG pipeline by loading YAML config and injecting secrets from .env.
         """
         # Load base configuration from YAML
         self.config = load_config(config_path)
-        
+
         # Load .env and inject the API keys
-        load_dotenv() 
+        load_dotenv()
         groq_api_keys_str = os.environ.get("GROQ_API_KEYS")
-        
+
         if groq_api_keys_str:
             groq_api_keys_list = [key.strip() for key in groq_api_keys_str.split(',')]
             self.config.setdefault('llm', {}).setdefault('api', {})['groq_api_keys'] = groq_api_keys_list
-        
+
         # Now that config is complete, set up logging
         setup_logging(self.config)
         self.logger = logging.getLogger(__name__)
-        
+
         # Log the result of the key loading
         if groq_api_keys_str:
             self.logger.info(f"Successfully loaded {len(groq_api_keys_list)} GROQ API keys.")
@@ -45,36 +46,38 @@ class RAGPipeline:
         self.embedding_service = EmbeddingService(self.config)
         self.vector_store = VectorStore(self.config)
         self.llm_service = LLMService(self.config)
-        
+
         # Retrieval configuration for re-ranking
         self.retrieval_config = self.config.get('retrieval', {})
         self.candidate_k = self.retrieval_config.get('candidate_k', 25)
         self.top_k = self.retrieval_config.get('top_k', 5)
         self.score_threshold = self.retrieval_config.get('score_threshold', 0.3)
-        
+        # MMR-lite diversity parameters
+        self.mmrl_lambda = self.retrieval_config.get('mmr_lambda', 0.5)
+
         self.logger.info("RAG Pipeline with re-ranking initialized")
-    
+
     def index_documents(self, file_paths: List[str]) -> Dict[str, Any]:
         """
         Index documents into the vector store.
         """
         self.logger.info(f"Starting document indexing for {len(file_paths)} files")
-        
+
         results = {
             'total_files': len(file_paths), 'processed_files': 0,
             'failed_files': 0, 'total_chunks': 0, 'errors': []
         }
-        
+
         try:
             with Timer("Document indexing"):
                 processed_docs = self.document_processor.process_multiple_files(file_paths)
                 all_chunks = []
-                
+
                 for doc in processed_docs:
                     if doc['metadata'].get('processed_successfully', False):
                         results['processed_files'] += 1
                         chunks = self.document_processor.chunk_text(
-                            doc['content'], 
+                            doc['content'],
                             metadata={
                                 'file_path': doc['file_path'], 'file_name': doc['file_name'],
                                 'file_type': doc['file_type'], 'file_hash': doc['file_hash']
@@ -86,46 +89,58 @@ class RAGPipeline:
                         results['failed_files'] += 1
                         error_msg = doc['metadata'].get('error', 'Unknown error')
                         results['errors'].append(f"{doc['file_name']}: {error_msg}")
-                
+
                 if all_chunks:
                     self.logger.info(f"Generating embeddings for {len(all_chunks)} chunks")
                     chunks_with_embeddings = self.embedding_service.encode_chunks(all_chunks)
-                    
+
                     self.logger.info("Storing chunks in vector database")
                     self.vector_store.add_documents(chunks_with_embeddings)
-                    
+
                     self.logger.info(f"Successfully indexed {results['processed_files']} files with {results['total_chunks']} chunks")
                 else:
                     self.logger.warning("No chunks generated from documents")
-                
+
         except Exception as e:
             self.logger.error(f"Error during document indexing: {e}", exc_info=True)
             results['errors'].append(f"Pipeline error: {str(e)}")
-        
+
         return results
-    
+
     async def query(self, user_query: str, preferred_model: Optional[str] = None) -> Dict[str, Any]:
         """
         Process a user query for the Streamlit App (Decision Making Task) using re-ranking.
         """
         self.logger.info(f"Processing decision query with re-ranking: '{user_query}'")
-        
+
         try:
             with Timer("Decision query processing"):
                 # Run parsing and retrieval concurrently to save time
                 parsed_query_task = self.llm_service.parse_query(user_query, preferred_model=preferred_model)
-                
-                query_embedding = self.embedding_service.encode_single_text(user_query)
+
+                # Query augmentation for recall (PED, AYUSH, NCD, maternity, grace period)
+                aug_terms = [
+                    "pre-existing", "ped", "pre existing",
+                    "ayush", "ayurveda", "homeopathy", "unani", "siddha", "yoga",
+                    "no claim discount", "ncd",
+                    "maternity", "childbirth",
+                    "grace period", "renewal grace",
+                    "room rent", "icu charges",
+                    "waiting period", "cataract",
+                ]
+                aug_query = user_query + "\n" + " ".join([t for t in aug_terms if t not in user_query.lower()])
+
+                query_embedding = self.embedding_service.encode_single_text(aug_query)
                 candidate_docs = self.vector_store.similarity_search(query_embedding, top_k=self.candidate_k)
                 reranked_docs = self.embedding_service.rerank_documents(user_query, candidate_docs)
-                final_docs = reranked_docs[:self.top_k]
-                
+                final_docs = self._select_diverse_topk(user_query, reranked_docs, self.top_k, self.mmrl_lambda)
+
                 # Wait for the parsing to complete
                 parsed_query = await parsed_query_task
-                
+
                 # Make the final decision with the best context
                 decision_result = await self.llm_service.make_decision(parsed_query, final_docs, preferred_model=preferred_model)
-                
+
                 result = {
                     'query': user_query,
                     'parsed_query': parsed_query,
@@ -144,11 +159,11 @@ class RAGPipeline:
                         'retrieval_candidates': len(candidate_docs)
                     }
                 }
-                
+
                 result['json_output'] = self._generate_json_output(result)
                 self.logger.info(f"Query processed successfully: {result['decision']}")
                 return result
-                
+
         except Exception as e:
             self.logger.error(f"Error processing query: {e}", exc_info=True)
             return {
@@ -160,23 +175,34 @@ class RAGPipeline:
     async def answer_question(self, question: str) -> str:
         """
         Asynchronously processes a single question for the API using re-ranking.
+        Adds a lightweight rule/regex extractor pass for common insurance Q types to boost accuracy and latency.
         """
         self.logger.info(f"Answering question with re-ranking: '{question}'")
         try:
             query_embedding = self.embedding_service.encode_single_text(question)
-            
+
             # Use non-thresholded search to cast a wide net for the re-ranker
             candidate_chunks = self.vector_store.similarity_search(
-                query_embedding, 
+                query_embedding,
                 top_k=self.candidate_k
             )
-            
+
             if not candidate_chunks:
                 return "The answer to this question could not be found in the provided document."
 
             reranked_chunks = self.embedding_service.rerank_documents(question, candidate_chunks)
-            final_context = reranked_chunks[:self.top_k]
-            
+            final_context = self._select_diverse_topk(question, reranked_chunks, self.top_k, self.mmrl_lambda)
+
+            # First, try the deterministic extractor for supported question types
+            try:
+                contexts_text = [doc.get('text', '') for doc in final_context]
+                extracted = extract_answer(question, contexts_text)
+                if extracted:
+                    return extracted
+            except Exception as ex:
+                self.logger.warning(f"Extractor fallback failed or not applicable: {ex}")
+
+            # Fall back to LLM answer synthesis
             answer = await self.llm_service.answer_question(question, final_context)
             return answer
 
@@ -210,13 +236,13 @@ class RAGPipeline:
                 'documents_retrieved': result.get('retrieved_documents', 0)
             }
         }
-    
+
     def get_system_status(self) -> Dict[str, Any]:
         """Get status of all pipeline components."""
         try:
             vector_stats = self.vector_store.get_collection_stats()
             embedding_info = self.embedding_service.get_model_info()
-            
+
             return {
                 'pipeline_status': 'healthy',
                 'vector_store': vector_stats,
@@ -231,7 +257,7 @@ class RAGPipeline:
         except Exception as e:
             self.logger.error(f"Error getting system status: {e}")
             return {'pipeline_status': 'error', 'error': str(e)}
-    
+
     def reset_index(self) -> Dict[str, Any]:
         """Reset the vector store index."""
         try:
@@ -240,9 +266,78 @@ class RAGPipeline:
         except Exception as e:
             self.logger.error(f"Error resetting index: {e}")
             return {'status': 'error', 'message': f'Failed to reset index: {str(e)}'}
-    
+
     async def batch_query(self, queries: List[str]) -> List[Dict[str, Any]]:
         """Process multiple queries in batch concurrently."""
         tasks = [self.query(q) for q in queries]
         results = await asyncio.gather(*tasks)
         return results
+
+    def _select_diverse_topk(self, query: str, docs: List[Dict[str, Any]], k: int, mmr_lambda: float = 0.5) -> List[Dict[str, Any]]:
+        """MMR-lite greedy selection for diversity over reranked docs.
+        Uses cached embeddings from the vector DB are not available; re-encodes texts here (top-N only).
+        mmr_lambda balances relevance vs. diversity (0..1)."""
+        if not docs:
+            return []
+        if len(docs) <= k:
+            return docs
+        try:
+            import numpy as np
+            texts = [d.get('text', '') for d in docs[: max(k*3, k+2)]]  # limit re-encode to keep fast
+            emb = self.embedding_service.encode_texts(texts, show_progress=False)
+            emb = np.array(emb) if not isinstance(emb, np.ndarray) else emb
+            # Normalize (should already be normalized by encoder)
+            def cos_sim(a, b):
+                return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-8))
+            # Relevance from rerank_score if present, otherwise cosine to query
+            qvec = self.embedding_service.encode_single_text(query)
+            rel = []
+            for i, d in enumerate(docs[:len(texts)]):
+                r = d.get('rerank_score')
+                if r is None:
+                    r = cos_sim(qvec, emb[i]) if qvec.size else 0.0
+                rel.append(float(r))
+            selected = []
+            remaining = list(range(len(texts)))
+            # Start with best relevance
+            first = int(max(range(len(rel)), key=lambda i: rel[i]))
+            selected.append(first)
+            remaining.remove(first)
+            while len(selected) < k and remaining:
+                best_idx = None
+                best_mmr = -1e12
+                for j in remaining:
+                    # diversity term: max similarity to already selected
+                    if selected:
+                        max_sim = max(cos_sim(emb[j], emb[i]) for i in selected)
+                        try:
+                            import numpy as np
+                            if np.isnan(max_sim):
+                                max_sim = 0.0
+                        except Exception:
+                            pass
+                    else:
+                        max_sim = 0.0
+                    score = mmr_lambda * rel[j] - (1 - mmr_lambda) * max_sim
+                    try:
+                        import numpy as np
+                        if np.isnan(score):
+                            score = -1e12
+                    except Exception:
+                        pass
+                    if score > best_mmr:
+                        best_mmr = score
+                        best_idx = j
+                if best_idx is None:
+                    best_idx = remaining[0]
+                selected.append(best_idx)
+                if best_idx in remaining:
+                    remaining.remove(best_idx)
+                else:
+                    break
+            # Map back to original docs order subset
+            chosen = [docs[i] for i in selected]
+            return chosen
+        except Exception as e:
+            self.logger.warning(f"MMR-lite selection failed, falling back to top-k: {e}")
+            return docs[:k]

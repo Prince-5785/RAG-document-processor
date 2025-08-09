@@ -40,33 +40,33 @@ except ImportError:
 
 class DocumentProcessor:
     """Handles document loading and text extraction from various file formats."""
-    
+
     def __init__(self, config: Dict[str, Any]):
         self.config = config
         self.supported_formats = config.get('ui', {}).get('supported_formats', ['pdf', 'docx', 'eml', 'txt'])
         self.logger = logging.getLogger(__name__)
-        
+
     def process_file(self, file_path: str) -> Dict[str, Any]:
         """
         Process a single file and extract text content with metadata.
-        
+
         Args:
             file_path: Path to the file to process
-            
+
         Returns:
             Dictionary containing extracted text, metadata, and processing info
         """
         if not os.path.exists(file_path):
             raise FileNotFoundError(f"File not found: {file_path}")
-            
+
         if not validate_file_type(file_path, self.supported_formats):
             raise ValueError(f"Unsupported file format: {Path(file_path).suffix}")
-            
+
         file_extension = Path(file_path).suffix.lower().lstrip('.')
         file_hash = get_file_hash(file_path)
-        
+
         self.logger.info(f"Processing file: {file_path}")
-        
+
         try:
             if file_extension == 'pdf':
                 content = self._process_pdf(file_path)
@@ -78,7 +78,7 @@ class DocumentProcessor:
                 content = self._process_text(file_path)
             else:
                 raise ValueError(f"Unsupported file format: {file_extension}")
-                
+
             return {
                 'file_path': file_path,
                 'file_name': Path(file_path).name,
@@ -90,7 +90,7 @@ class DocumentProcessor:
                     'processed_successfully': True
                 }
             }
-            
+
         except Exception as e:
             self.logger.error(f"Error processing file {file_path}: {str(e)}")
             return {
@@ -105,14 +105,14 @@ class DocumentProcessor:
                     'error': str(e)
                 }
             }
-    
+
     def _process_pdf(self, file_path: str) -> str:
         """Extract text from PDF file."""
         if not PDF_AVAILABLE:
             raise ImportError("PDF processing libraries not available")
-            
+
         text_content = []
-        
+
         try:
             # Try pdfplumber first (better for complex layouts)
             with pdfplumber.open(file_path) as pdf:
@@ -120,7 +120,7 @@ class DocumentProcessor:
                     text = page.extract_text()
                     if text:
                         text_content.append(f"[Page {page_num}]\n{text}")
-                        
+
         except Exception as e:
             self.logger.warning(f"pdfplumber failed for {file_path}, trying pypdf: {e}")
 
@@ -135,22 +135,22 @@ class DocumentProcessor:
             except Exception as e2:
                 self.logger.error(f"Both PDF processors failed for {file_path}: {e2}")
                 raise e2
-        
+
         return clean_text('\n\n'.join(text_content))
-    
+
     def _process_docx(self, file_path: str) -> str:
         """Extract text from Word document."""
         if not DOCX_AVAILABLE:
             raise ImportError("Word document processing not available")
-            
+
         doc = Document(file_path)
         text_content = []
-        
+
         # Extract paragraphs
         for paragraph in doc.paragraphs:
             if paragraph.text.strip():
                 text_content.append(paragraph.text)
-        
+
         # Extract tables
         for table in doc.tables:
             for row in table.rows:
@@ -160,22 +160,22 @@ class DocumentProcessor:
                         row_text.append(cell.text.strip())
                 if row_text:
                     text_content.append(' | '.join(row_text))
-        
+
         return clean_text('\n\n'.join(text_content))
-    
+
     def _process_email(self, file_path: str) -> str:
         """Extract text from email file."""
         with open(file_path, 'r', encoding='utf-8', errors='ignore') as file:
             msg = email.message_from_file(file)
-        
+
         text_content = []
-        
+
         # Extract headers
         subject = msg.get('Subject', '')
         sender = msg.get('From', '')
         recipient = msg.get('To', '')
         date = msg.get('Date', '')
-        
+
         if subject:
             text_content.append(f"Subject: {subject}")
         if sender:
@@ -184,9 +184,9 @@ class DocumentProcessor:
             text_content.append(f"To: {recipient}")
         if date:
             text_content.append(f"Date: {date}")
-        
+
         text_content.append("")  # Empty line separator
-        
+
         # Extract body
         if msg.is_multipart():
             for part in msg.walk():
@@ -199,9 +199,9 @@ class DocumentProcessor:
             body = msg.get_payload(decode=True)
             if body:
                 text_content.append(body.decode('utf-8', errors='ignore'))
-        
+
         return clean_text('\n\n'.join(text_content))
-    
+
     def _process_text(self, file_path: str) -> str:
         """Extract text from plain text file."""
         try:
@@ -211,21 +211,21 @@ class DocumentProcessor:
             # Try with different encoding
             with open(file_path, 'r', encoding='latin-1') as file:
                 content = file.read()
-        
+
         return clean_text(content)
-    
+
     def process_multiple_files(self, file_paths: List[str]) -> List[Dict[str, Any]]:
         """
         Process multiple files and return their extracted content.
-        
+
         Args:
             file_paths: List of file paths to process
-            
+
         Returns:
             List of dictionaries containing processed file information
         """
         results = []
-        
+
         for file_path in file_paths:
             try:
                 result = self.process_file(file_path)
@@ -241,9 +241,9 @@ class DocumentProcessor:
                         'error': str(e)
                     }
                 })
-        
+
         return results
-    
+
     def get_supported_formats(self) -> List[str]:
         """Return list of supported file formats."""
         return self.supported_formats.copy()
@@ -259,6 +259,9 @@ class DocumentProcessor:
         Returns:
             List of dictionaries containing chunk text and metadata
         """
+        # Light heading normalization to align clauses and reduce bleed across sections
+        normalized_text = self._normalize_headings(text)
+
         if not text.strip():
             return []
 
@@ -275,18 +278,29 @@ class DocumentProcessor:
                 separators=separators,
                 length_function=len,
             )
-            chunks = text_splitter.split_text(text)
+            chunks = text_splitter.split_text(normalized_text)
         else:
             # Fallback to basic chunking
-            chunks = self._basic_text_chunking(text, chunk_size, chunk_overlap)
+            chunks = self._basic_text_chunking(normalized_text, chunk_size, chunk_overlap)
 
         # Create chunk objects with metadata
+        import re
         chunk_objects = []
         for i, chunk in enumerate(chunks):
+            # Try to infer page number if present in text (from PDF extractor)
+            page_hint = None
+            m = re.search(r"\[Page\s+(\d+)\]", chunk)
+            if m:
+                try:
+                    page_hint = int(m.group(1))
+                except Exception:
+                    page_hint = None
+
             chunk_metadata = {
                 'chunk_index': i,
                 'chunk_size': len(chunk),
-                'total_chunks': len(chunks)
+                'total_chunks': len(chunks),
+                'page_hint': page_hint
             }
 
             if metadata:
@@ -298,6 +312,30 @@ class DocumentProcessor:
             })
 
         return chunk_objects
+
+    def _normalize_headings(self, text: str) -> str:
+        """Insert clear delimiters before common policy headings to aid chunk alignment.
+        This is a lightweight pass using regex; it does not alter content semantics."""
+        import re
+        if not text:
+            return text
+        patterns = [
+            r"\b(DEFINITIONS)\b",
+            r"\b(EXCLUSIONS)\b",
+            r"\b(INCLUSIONS)\b",
+            r"\b(COVERAGE)\b",
+            r"\b(SUM INSURED)\b",
+            r"\b(WAITING PERIODS?)\b",
+            r"\b(MATERNITY BENEFIT)\b",
+            r"\b(PRE\-EXISTING DISEASES?\s*\(PED\)?)\b",
+            r"\b(NO CLAIM DISCOUNT|NCD)\b",
+            r"\b(AYUSH)\b",
+            r"\b(ROOM RENT|ICU CHARGES)\b",
+        ]
+        normalized = text
+        for pat in patterns:
+            normalized = re.sub(pat, r"\n\n=== \1 ===\n\n", normalized, flags=re.IGNORECASE)
+        return normalized
 
     def _basic_text_chunking(self, text: str, chunk_size: int, chunk_overlap: int) -> List[str]:
         """

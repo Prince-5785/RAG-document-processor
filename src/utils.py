@@ -124,7 +124,7 @@ def extract_json_from_text(text: str) -> Optional[Dict[str, Any]]:
         # Fallback to finding the first occurrence of a curly brace
         first_brace = text.find('{')
         if first_brace == -1:
-            logger.debug("No JSON object found in text.")
+            logging.debug("No JSON object found in text.")
             return None
         json_str = text[first_brace:]
 
@@ -145,17 +145,17 @@ def extract_json_from_text(text: str) -> Optional[Dict[str, Any]]:
             if open_braces == 0 and i > 0:
                 end_index = i + 1
                 break
-        
+
         if end_index != -1:
             potential_json = json_str[:end_index]
             try:
                 return json.loads(potential_json)
             except json.JSONDecodeError as e:
-                logger.error(f"Failed to decode JSON substring: {e}")
-                logger.debug(f"Invalid JSON string: {potential_json}")
+                logging.error(f"Failed to decode JSON substring: {e}")
+                logging.debug(f"Invalid JSON string: {potential_json}")
                 return None
 
-    logger.error("Could not extract a valid JSON object from the provided text.")
+    logging.error("Could not extract a valid JSON object from the provided text.")
     return None
 
 class Timer:
