@@ -1,0 +1,54 @@
+# Git
+.git/
+.gitignore
+.github/
+
+# Python bytecode and cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Testing and coverage
+.pytest_cache/
+.coverage
+htmlcov/
+tests/
+test_chroma_index/
+
+# Logs
+*.log
+logs/
+
+# Environment files and credentials
+.env
+.env.*
+!.env.example
+
+# IDEs and OS metadata
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+.DS_Store?
+._*
+Thumbs.db
+
+# Local storage, indexes, and large models
+data/chroma_index/
+data/cache/
+models/
+*.bin
+*.safetensors
+*.onnx
+
+# Documentation & markdown (not needed for runtime)
+*.md

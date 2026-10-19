@@ -1,0 +1,282 @@
+[
+  {
+    "id": "Q01",
+    "question": "What is the maximum sum insured per policy year under this health insurance policy?",
+    "expected_answer": "₹5,00,000 per policy year",
+    "ground_truth_keywords": ["5,00,000", "sum insured"],
+    "category": "coverage",
+    "source_file": "sample_insurance_policy.txt"
+  },
+  {
+    "id": "Q02",
+    "question": "What is the minimum hospital stay required for hospitalization expenses to be covered?",
+    "expected_answer": "A minimum stay of 24 hours is required.",
+    "ground_truth_keywords": ["hospitalization", "24 hours"],
+    "category": "coverage",
+    "source_file": "sample_insurance_policy.txt"
+  },
+  {
+    "id": "Q03",
+    "question": "How many days of pre-hospitalization expenses are covered under the policy?",
+    "expected_answer": "30 days of pre-hospitalization expenses.",
+    "ground_truth_keywords": ["pre-hospitalization", "30 days"],
+    "category": "coverage",
+    "source_file": "sample_insurance_policy.txt"
+  },
+  {
+    "id": "Q04",
+    "question": "How many days of post-hospitalization medical expenses are reimbursed?",
+    "expected_answer": "60 days of post-hospitalization medical expenses.",
+    "ground_truth_keywords": ["post-hospitalization", "60 days"],
+    "category": "coverage",
+    "source_file": "sample_insurance_policy.txt"
+  },
+  {
+    "id": "Q05",
+    "question": "What is the daily room rent sub-limit allowed under this policy?",
+    "expected_answer": "Up to ₹5,000 per day for room rent.",
+    "ground_truth_keywords": ["room rent", "5,000"],
+    "category": "sub-limits",
+    "source_file": "sample_insurance_policy.txt"
+  },
+  {
+    "id": "Q06",
+    "question": "What is the maximum daily ICU charge covered by the insurance?",
+    "expected_answer": "Up to ₹10,000 per day for ICU charges.",
+    "ground_truth_keywords": ["icu charges", "10,000"],
+    "category": "sub-limits",
+    "source_file": "sample_insurance_policy.txt"
+  },
+  {
+    "id": "Q07",
+    "question": "What is the emergency ambulance allowance per incident?",
+    "expected_answer": "₹2,000 per incident.",
+    "ground_truth_keywords": ["ambulance", "2,000"],
+    "category": "coverage",
+    "source_file": "sample_insurance_policy.txt"
+  },
+  {
+    "id": "Q08",
+    "question": "What are the minimum and maximum entry age limits for this insurance?",
+    "expected_answer": "Minimum entry age is 18 years and maximum entry age is 65 years.",
+    "ground_truth_keywords": ["minimum entry age: 18", "maximum entry age: 65"],
+    "category": "eligibility",
+    "source_file": "sample_insurance_policy.txt"
+  },
+  {
+    "id": "Q09",
+    "question": "Is emergency medical treatment abroad covered and what is the limit?",
+    "expected_answer": "Yes, emergency coverage abroad is available up to ₹1,00,000.",
+    "ground_truth_keywords": ["emergency coverage abroad", "1,00,000"],
+    "category": "coverage",
+    "source_file": "sample_insurance_policy.txt"
+  },
+  {
+    "id": "Q10",
+    "question": "Are cosmetic or plastic surgeries covered under this policy?",
+    "expected_answer": "Cosmetic or plastic surgery is permanently excluded unless medically necessary.",
+    "ground_truth_keywords": ["cosmetic or plastic surgery", "medically necessary"],
+    "category": "exclusions",
+    "source_file": "sample_insurance_policy.txt"
+  },
+  {
+    "id": "Q11",
+    "question": "Under what condition is dental treatment covered by the policy?",
+    "expected_answer": "Dental treatment is excluded unless it is required due to an accident.",
+    "ground_truth_keywords": ["dental treatment", "accident"],
+    "category": "exclusions",
+    "source_file": "sample_insurance_policy.txt"
+  },
+  {
+    "id": "Q12",
+    "question": "What is the waiting period for pre-existing diseases?",
+    "expected_answer": "The waiting period for pre-existing diseases is 48 months.",
+    "ground_truth_keywords": ["pre-existing diseases", "48 months"],
+    "category": "waiting_period",
+    "source_file": "sample_insurance_policy.txt"
+  },
+  {
+    "id": "Q13",
+    "question": "What is the waiting period for specific diseases like diabetes and hypertension?",
+    "expected_answer": "24 months for specific diseases including diabetes, hypertension, and heart disease.",
+    "ground_truth_keywords": ["specific diseases", "24 months", "diabetes"],
+    "category": "waiting_period",
+    "source_file": "sample_insurance_policy.txt"
+  },
+  {
+    "id": "Q14",
+    "question": "How long is the waiting period before maternity benefits can be claimed?",
+    "expected_answer": "36 months waiting period for maternity benefits.",
+    "ground_truth_keywords": ["maternity benefits", "36 months"],
+    "category": "waiting_period",
+    "source_file": "sample_insurance_policy.txt"
+  },
+  {
+    "id": "Q15",
+    "question": "How many hospitals are in the network for cashless claim settlement?",
+    "expected_answer": "Over 1,200 empaneled network hospitals.",
+    "ground_truth_keywords": ["network hospitals", "1,200"],
+    "category": "claims_procedure",
+    "source_file": "sample_insurance_policy.txt"
+  },
+  {
+    "id": "Q16",
+    "question": "How many hours before planned treatment must pre-authorization be requested?",
+    "expected_answer": "Submit request 48 hours before planned treatment.",
+    "ground_truth_keywords": ["pre-authorization", "48 hours"],
+    "category": "claims_procedure",
+    "source_file": "claims_guidelines.txt"
+  },
+  {
+    "id": "Q17",
+    "question": "In emergency cases, within how many hours must the hospital admission be intimated?",
+    "expected_answer": "Within 24 hours of admission.",
+    "ground_truth_keywords": ["emergency cases", "24 hours"],
+    "category": "claims_procedure",
+    "source_file": "claims_guidelines.txt"
+  },
+  {
+    "id": "Q18",
+    "question": "What is the turnaround time for communicating cashless pre-authorization approval or rejection?",
+    "expected_answer": "Within 2 hours.",
+    "ground_truth_keywords": ["approval/rejection", "2 hours"],
+    "category": "claims_procedure",
+    "source_file": "claims_guidelines.txt"
+  },
+  {
+    "id": "Q19",
+    "question": "Within how many days of discharge must a reimbursement claim be intimated?",
+    "expected_answer": "Within 30 days from discharge.",
+    "ground_truth_keywords": ["claim intimation", "30 days from discharge"],
+    "category": "claims_procedure",
+    "source_file": "claims_guidelines.txt"
+  },
+  {
+    "id": "Q20",
+    "question": "What is the deadline for submitting all original documents for a reimbursement claim?",
+    "expected_answer": "45 days from hospital discharge.",
+    "ground_truth_keywords": ["document submission", "45 days"],
+    "category": "claims_procedure",
+    "source_file": "claims_guidelines.txt"
+  },
+  {
+    "id": "Q21",
+    "question": "Are photocopies of hospital bills accepted for reimbursement claims?",
+    "expected_answer": "No, original bills are required and photocopies are not accepted.",
+    "ground_truth_keywords": ["original bills", "photocopies not accepted"],
+    "category": "claims_procedure",
+    "source_file": "claims_guidelines.txt"
+  },
+  {
+    "id": "Q22",
+    "question": "What is the claim settlement timeframe once all complete documents are submitted?",
+    "expected_answer": "Within 30 days from complete documentation (or 15-30 days).",
+    "ground_truth_keywords": ["settlement", "30 days"],
+    "category": "claims_procedure",
+    "source_file": "claims_guidelines.txt"
+  },
+  {
+    "id": "Q23",
+    "question": "What is the published claim settlement ratio of the insurer?",
+    "expected_answer": "98.5% claim settlement ratio.",
+    "ground_truth_keywords": ["claim settlement ratio", "98.5%"],
+    "category": "coverage",
+    "source_file": "sample_insurance_policy.txt"
+  },
+  {
+    "id": "Q24",
+    "question": "Are treatments for alcoholism or drug addiction covered by the policy?",
+    "expected_answer": "No, treatments for alcoholism or drug addiction are permanently excluded.",
+    "ground_truth_keywords": ["alcoholism or drug addiction", "permanent exclusions"],
+    "category": "exclusions",
+    "source_file": "sample_insurance_policy.txt"
+  },
+  {
+    "id": "Q25",
+    "question": "Are self-inflicted injuries covered under the insurance policy?",
+    "expected_answer": "No, self-inflicted injuries are permanently excluded.",
+    "ground_truth_keywords": ["self-inflicted injuries", "exclusions"],
+    "category": "exclusions",
+    "source_file": "sample_insurance_policy.txt"
+  },
+  {
+    "id": "Q26",
+    "question": "What are the required documents for filing a reimbursement claim?",
+    "expected_answer": "Original bills, discharge summary, diagnostic reports, doctor prescription, and identity proof.",
+    "ground_truth_keywords": ["discharge summary", "original bills", "diagnostic reports"],
+    "category": "claims_procedure",
+    "source_file": "claims_guidelines.txt"
+  },
+  {
+    "id": "Q27",
+    "question": "Is lifelong renewal available for this health insurance policy?",
+    "expected_answer": "Yes, renewal is lifelong subject to policy terms.",
+    "ground_truth_keywords": ["renewal", "lifelong"],
+    "category": "eligibility",
+    "source_file": "sample_insurance_policy.txt"
+  },
+  {
+    "id": "Q28",
+    "question": "What happens if immediate emergency treatment is needed without cashless pre-authorization?",
+    "expected_answer": "Immediate treatment is allowed without pre-authorization, with intimation required within 24 hours.",
+    "ground_truth_keywords": ["immediate treatment allowed", "intimation required within 24 hours"],
+    "category": "claims_procedure",
+    "source_file": "claims_guidelines.txt"
+  },
+  {
+    "id": "Q29",
+    "question": "Are spectacles and contact lenses covered under permanent exclusions?",
+    "expected_answer": "Yes, spectacles, contact lenses, and hearing aids are permanently excluded.",
+    "ground_truth_keywords": ["spectacles", "contact lenses", "hearing aids"],
+    "category": "exclusions",
+    "source_file": "sample_insurance_policy.txt"
+  },
+  {
+    "id": "Q30",
+    "question": "Is war or nuclear risk covered by the insurance policy?",
+    "expected_answer": "No, war, nuclear risks, and terrorism are permanent exclusions.",
+    "ground_truth_keywords": ["war, nuclear risks", "terrorism"],
+    "category": "exclusions",
+    "source_file": "sample_insurance_policy.txt"
+  },
+  {
+    "id": "Q31",
+    "question": "What are the general eligibility verification rules before processing any claim?",
+    "expected_answer": "Policy must be active, premiums paid, treatment within coverage, waiting periods completed, and age limits satisfied.",
+    "ground_truth_keywords": ["policy must be active", "waiting periods must be completed", "age limits"],
+    "category": "eligibility",
+    "source_file": "claims_guidelines.txt"
+  },
+  {
+    "id": "Q32",
+    "question": "What does the investigation process for reimbursement claims involve?",
+    "expected_answer": "Medical necessity verification, bill audit, hospital/doctor verification, and requesting additional documents.",
+    "ground_truth_keywords": ["medical necessity", "bill verification", "audit"],
+    "category": "claims_procedure",
+    "source_file": "claims_guidelines.txt"
+  },
+  {
+    "id": "Q33",
+    "question": "Are day care procedures covered even if the stay is under 24 hours?",
+    "expected_answer": "Yes, day care procedures on the attached list are covered benefits.",
+    "ground_truth_keywords": ["day care procedures", "covered benefits"],
+    "category": "coverage",
+    "source_file": "sample_insurance_policy.txt"
+  },
+  {
+    "id": "Q34",
+    "question": "Can dependent children and spouse be covered under a family floater?",
+    "expected_answer": "Yes, family floater coverage is available for spouse and dependent children.",
+    "ground_truth_keywords": ["family floater", "spouse", "dependent children"],
+    "category": "coverage",
+    "source_file": "sample_insurance_policy.txt"
+  },
+  {
+    "id": "Q35",
+    "question": "What out-of-pocket expenses is a patient responsible for at a network hospital during cashless treatment?",
+    "expected_answer": "Patient is responsible only for non-covered expenses.",
+    "ground_truth_keywords": ["patient responsible only for non-covered expenses"],
+    "category": "claims_procedure",
+    "source_file": "claims_guidelines.txt"
+  }
+]

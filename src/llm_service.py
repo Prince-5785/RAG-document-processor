@@ -3,7 +3,7 @@ import logging
 import re
 import asyncio
 import random
-from typing import Dict, Any, List, Optional, Callable
+from typing import Dict, Any, List, Optional, Callable, AsyncGenerator
 
 try:
     from groq import Groq, APIError, AsyncGroq, RateLimitError
@@ -24,7 +24,8 @@ from .utils import Timer, extract_json_from_text
 
 class LLMService:
     """
-    Service for LLM-based tasks with key rotation, exponential backoff, and a fallback chain.
+    Service for LLM-based insurance parsing, decision making, QA, and token streaming
+    with key rotation, exponential backoff, and local fallback.
     """
     
     def __init__(self, config: Dict[str, Any]):
@@ -33,12 +34,17 @@ class LLMService:
         self.logger = logging.getLogger(__name__)
 
         api_config = self.llm_config.get('api', {})
-        self.model_sequence = api_config.get('model_sequence', [])
+        self.model_sequence = api_config.get('model_sequence', [
+            'qwen/qwen3.8-27b',
+            'openai/gpt-oss-120b',
+            'openai/gpt-oss-20b',
+            'allam-2-7b'
+        ])
         
         self.groq_api_keys = api_config.get('groq_api_keys', [])
         self.key_index = 0
         if not self.groq_api_keys:
-            self.logger.warning("No Groq API keys found in configuration. API calls will fail.")
+            self.logger.warning("No Groq API keys found in configuration. API calls will use rule-based fallback.")
 
         retry_config = api_config.get('retries', {})
         self.max_attempts = retry_config.get('max_attempts', 5)
@@ -64,7 +70,6 @@ class LLMService:
     def load_local_model(self) -> None:
         """Loads the local language model for the final LLM fallback."""
         if not TRANSFORMERS_AVAILABLE or not self.local_model_name:
-            self.logger.info("No local model configured or transformers not installed. Skipping load.")
             return
         if self.local_model is not None:
             return
@@ -90,7 +95,7 @@ class LLMService:
             self.local_pipeline = None
 
     async def parse_query(self, query: str, preferred_model: Optional[str] = None) -> Dict[str, Any]:
-        """Asynchronously parses a user query using the sequential fallback chain."""
+        """Asynchronously parses a user query into structured attributes."""
         self.logger.info(f"Starting query parsing for: '{query[:50]}...'")
         prompt = self._create_query_parsing_prompt(query)
         parsed_data = await self._execute_task_with_fallback(
@@ -104,8 +109,13 @@ class LLMService:
         self.logger.warning("All LLM attempts failed. Using final rule-based parser.")
         return self._fallback_query_parsing(query)
 
-    async def make_decision(self, query_data: Dict[str, Any], retrieved_contexts: List[Dict[str, Any]], preferred_model: Optional[str] = None) -> Dict[str, Any]:
-        """Asynchronously makes an insurance decision using the sequential fallback chain."""
+    async def make_decision(
+        self,
+        query_data: Dict[str, Any],
+        retrieved_contexts: List[Dict[str, Any]],
+        preferred_model: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Asynchronously makes an insurance claim decision with structured justification."""
         self.logger.info("Starting decision making process.")
         prompt = self._create_decision_prompt(query_data, retrieved_contexts)
         decision_data = await self._execute_task_with_fallback(
@@ -120,24 +130,80 @@ class LLMService:
         return self._fallback_decision_making(query_data, retrieved_contexts)
 
     async def answer_question(self, question: str, contexts: List[Dict[str, Any]]) -> str:
-        """Asynchronously generates a direct answer to a question using provided context."""
+        """Asynchronously generates a direct answer grounded in provided policy context."""
         self.logger.info(f"Generating answer for question: '{question[:50]}...'")
         prompt = self._create_qa_prompt(question, contexts)
 
         answer_data = await self._execute_task_with_fallback(
             prompt=prompt,
             parse_function=lambda text: {"answer": text.strip()},
-            max_new_tokens=300,
-            # preferred_model="llama-3.1-8b-instant"
+            max_new_tokens=350,
         )
 
         if answer_data and answer_data.get("answer"):
             return answer_data["answer"]
         
-        self.logger.warning("All LLM attempts failed to generate an answer.")
-        return "The information could not be retrieved from the provided documents."
+        self.logger.warning("All LLM attempts failed to generate an answer. Falling back to rule-based answer.")
+        return self._rule_based_answer(question, contexts)
 
-    async def _execute_task_with_fallback(self, prompt: str, parse_function: Callable, max_new_tokens: int, preferred_model: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    async def stream_answer_question(
+        self,
+        question: str,
+        contexts: List[Dict[str, Any]],
+        preferred_model: Optional[str] = None
+    ) -> AsyncGenerator[str, None]:
+        """
+        Streams token-by-token answer via Groq API.
+        Falls back to yielding a complete string if streaming fails.
+        """
+        if not contexts:
+            yield "The answer to this question could not be found in the provided document."
+            return
+
+        prompt = self._create_qa_prompt(question, contexts)
+        model_id = preferred_model or (self.model_sequence[0] if self.model_sequence else "qwen/qwen3.8-27b")
+        
+        stream_success = False
+        if GROQ_AVAILABLE and self.groq_api_keys:
+            for attempt in range(self.max_attempts):
+                api_key = self._get_next_api_key()
+                if not api_key:
+                    break
+                try:
+                    client = AsyncGroq(api_key=api_key)
+                    completion = await client.chat.completions.create(
+                        messages=[{"role": "user", "content": prompt}],
+                        model=model_id,
+                        temperature=self.temperature,
+                        max_tokens=350,
+                        top_p=self.top_p,
+                        stream=True
+                    )
+                    stream_success = True
+                    async for chunk in completion:
+                        if chunk.choices and chunk.choices[0].delta and chunk.choices[0].delta.content:
+                            yield chunk.choices[0].delta.content
+                    return
+                except Exception as e:
+                    self.logger.warning(f"Streaming error on attempt {attempt + 1}: {e}")
+                    if attempt < self.max_attempts - 1:
+                        await asyncio.sleep(self.initial_delay)
+
+        if not stream_success:
+            # Fallback non-streaming answer yielded word-by-word
+            fallback_ans = await self.answer_question(question, contexts)
+            words = fallback_ans.split(' ')
+            for i, word in enumerate(words):
+                yield word + (" " if i < len(words) - 1 else "")
+                await asyncio.sleep(0.01)
+
+    async def _execute_task_with_fallback(
+        self,
+        prompt: str,
+        parse_function: Callable,
+        max_new_tokens: int,
+        preferred_model: Optional[str] = None
+    ) -> Optional[Dict[str, Any]]:
         """Core logic to attempt a task with a sequence of models."""
         model_run_sequence = list(self.model_sequence)
         if preferred_model and preferred_model in model_run_sequence:
@@ -181,10 +247,12 @@ class LLMService:
 
     async def _generate_response_from_api(self, model_id: str, prompt: str, max_new_tokens: int) -> Optional[str]:
         """Asynchronously generates a response using Groq API with key rotation and exponential backoff."""
+        if not GROQ_AVAILABLE or not self.groq_api_keys:
+            return None
+
         for attempt in range(self.max_attempts):
             api_key = self._get_next_api_key()
             if not api_key:
-                self.logger.error("No API keys available to make a request.")
                 return None
             
             try:
@@ -206,7 +274,6 @@ class LLMService:
                 delay = min(self.initial_delay * (2 ** attempt), self.max_delay)
                 jitter = delay * random.uniform(0.1, 0.5)
                 wait_time = delay + jitter
-                self.logger.info(f"Retrying in {wait_time:.2f} seconds...")
                 await asyncio.sleep(wait_time)
         
         self.logger.error(f"API request failed after {self.max_attempts} attempts for model {model_id}.")
@@ -244,18 +311,19 @@ JSON:
         """Creates a prompt for the decision-making task using multi-step reasoning."""
         context_text = ""
         for i, context in enumerate(contexts[:5], 1):
-            context_text += f"Clause {i}: {context.get('text', '')}\n\n"
+            page_info = f" (Page {context.get('metadata', {}).get('page', 1)})" if context.get('metadata') else ""
+            context_text += f"Clause {i}{page_info}: {context.get('text', '')}\n\n"
         
         return f"""You are a senior insurance claims processor. Your task is to meticulously evaluate an insurance claim based on the provided information and policy clauses. You must follow a strict reasoning process.
 
 ### REASONING STEPS:
-1.  **Analyze Policy Requirements:** First, carefully read the 'Relevant Policy Clauses' and identify the key conditions for approval.
-2.  **Assess User Information:** Review the 'Query Information' provided. Note which details are present and which are missing.
-3.  **Compare and Identify Gaps:** Compare the user's information against the policy requirements. Explicitly state any critical information that is missing.
-4.  **Formulate a Conclusion:** Based on your comparison, make a final decision.
-    - **APPROVE:** Only if you have all necessary information and the claim clearly meets all policy requirements.
-    - **REJECT:** If the claim clearly violates a policy rule OR if critical information is missing.
-5.  **Write Justification:** Your justification must be based on your reasoning. If rejecting due to missing information, you MUST state exactly what information is needed.
+1.  **Analyze Policy Requirements:** First, carefully read the 'Relevant Policy Clauses' and identify key conditions for approval.
+2.  **Assess User Information:** Review the 'Query Information' provided.
+3.  **Compare and Identify Gaps:** Check whether waiting periods, age limits, or exclusions apply.
+4.  **Formulate Conclusion:**
+    - **APPROVE:** Only if you have all necessary information and the claim clearly meets policy requirements.
+    - **REJECT:** If the claim clearly violates a policy rule or exclusion.
+5.  **Write Justification:** Provide the exact reason, referencing specific clause numbers.
 
 ---
 ### TASK:
@@ -281,7 +349,11 @@ Response:"""
         if not contexts:
             context_text = "No relevant context found."
         else:
-            context_text = "\n\n---\n\n".join([ctx.get('text', '') for ctx in contexts])
+            pieces = []
+            for ctx in contexts:
+                page_str = f" [Page {ctx.get('metadata', {}).get('page', 1)}]" if ctx.get('metadata') else ""
+                pieces.append(f"{ctx.get('text', '')}{page_str}")
+            context_text = "\n\n---\n\n".join(pieces)
 
         return f"""You are an expert assistant specialized in reading and understanding insurance policy documents. Your task is to answer the user's question based *only* on the provided context.
 
@@ -292,9 +364,9 @@ Response:"""
 {question}
 
 **INSTRUCTIONS:**
-- Answer concisely and accurately.
+- Answer concisely and accurately based solely on the provided clauses.
 - If the answer cannot be found in the context, you MUST state: "The answer to this question could not be found in the provided document."
-- Do not use any prior knowledge.
+- Do not make assumptions or fabricate terms.
 
 **ANSWER:**
 """
@@ -324,7 +396,25 @@ Response:"""
         except Exception as e:
             self.logger.error(f"Error parsing decision response: {e}")
             return None
-    
+
+    def _rule_based_answer(self, question: str, contexts: List[Dict[str, Any]]) -> str:
+        """Fallback extractive answer when LLM is offline."""
+        if not contexts:
+            return "The answer to this question could not be found in the provided document."
+        top_clause = contexts[0].get('text', '')
+        # Pick the most relevant sentence from top clause
+        sentences = [s.strip() for s in re.split(r'[.\n]+', top_clause) if len(s.strip()) > 10]
+        q_words = set(re.findall(r'\b\w+\b', question.lower()))
+        best_sentence = top_clause[:200]
+        max_overlap = -1
+        for sent in sentences:
+            s_words = set(re.findall(r'\b\w+\b', sent.lower()))
+            overlap = len(q_words.intersection(s_words))
+            if overlap > max_overlap:
+                max_overlap = overlap
+                best_sentence = sent
+        return f"{best_sentence}."
+
     def _fallback_query_parsing(self, query: str) -> Dict[str, Any]:
         """Final fallback using rule-based regular expressions."""
         self.logger.info("Executing rule-based query parsing.")
@@ -332,7 +422,7 @@ Response:"""
         age_match = re.search(r'(\d+)[-\s]*year', query_lower)
         age = int(age_match.group(1)) if age_match else None
         gender = 'male' if 'male' in query_lower else 'female' if 'female' in query_lower else None
-        procedures = ['surgery', 'treatment', 'operation', 'procedure', 'therapy']
+        procedures = ['surgery', 'treatment', 'operation', 'procedure', 'therapy', 'hospitalization', 'maternity', 'dental']
         procedure = next((proc for proc in procedures if proc in query_lower), None)
         cities = ['mumbai', 'delhi', 'bangalore', 'pune', 'chennai', 'kolkata', 'hyderabad']
         location = next((city.title() for city in cities if city in query_lower), None)
@@ -348,16 +438,25 @@ Response:"""
     def _fallback_decision_making(self, query_data: Dict[str, Any], contexts: List[Dict[str, Any]]) -> Dict[str, Any]:
         """Final fallback using simple business rules."""
         self.logger.info("Executing rule-based decision making.")
-        decision = "APPROVED"
-        payout = 50000
-        justification = f"Claim approved based on policy terms. Age: {query_data.get('age', 'N/A')}, Procedure: {query_data.get('procedure', 'N/A')}"
         age = query_data.get('age')
-        if age and age > 65:
-            decision = "REJECTED"
-            payout = 0
-            justification = "Age exceeds policy limit of 65 years."
+        procedure = query_data.get('procedure', '')
         
+        if age and age > 65:
+            return {
+                'decision': 'REJECTED', 'payout': 0,
+                'justification': "Age exceeds maximum entry age limit of 65 years.",
+                'raw_response': "Fallback decision: REJECTED", 'model_used': 'rule-based-fallback'
+            }
+        
+        if procedure and any(ex in procedure.lower() for ex in ['cosmetic', 'dental']):
+            return {
+                'decision': 'REJECTED', 'payout': 0,
+                'justification': f"Procedure '{procedure}' falls under policy permanent exclusions.",
+                'raw_response': "Fallback decision: REJECTED", 'model_used': 'rule-based-fallback'
+            }
+
         return {
-            'decision': decision, 'payout': payout, 'justification': justification,
-            'raw_response': f"Fallback decision: {decision}", 'model_used': 'rule-based-fallback'
+            'decision': 'APPROVED', 'payout': 50000,
+            'justification': f"Claim tentatively approved under general hospitalization terms. Age: {age or 'N/A'}, Procedure: {procedure or 'medical treatment'}.",
+            'raw_response': "Fallback decision: APPROVED", 'model_used': 'rule-based-fallback'
         }

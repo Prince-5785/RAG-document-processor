@@ -15,9 +15,11 @@ from pathlib import Path
 from src.rag_pipeline import RAGPipeline
 from src.utils import format_file_size
 
+import asyncio
+
 # Page configuration
 st.set_page_config(
-    page_title="CodersHub Insurance Query Solver",
+    page_title="InsureQuery – AI Insurance Decision System",
     page_icon="🏥",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -170,10 +172,13 @@ def display_query_result(result: Dict[str, Any]):
         </div>
         """, unsafe_allow_html=True)
         
-        # Show relevant clauses
-        with st.expander("View Relevant Policy Clauses"):
+        # Show relevant clauses with citations
+        with st.expander("View Relevant Policy Clauses (Citations)"):
             for i, clause in enumerate(result.get('relevant_clauses', []), 1):
-                st.markdown(f"**Clause {i}** (Relevance: {clause['score']:.2f})")
+                meta = clause.get('metadata', {})
+                file_name = meta.get('file_name', 'Policy')
+                page_num = meta.get('page', 1)
+                st.markdown(f"**Clause {i}** (Relevance: `{clause['score']:.2f}` | Source: `{file_name}` | Page: `{page_num}`)")
                 st.text(clause['text'])
                 st.markdown("---")
 
@@ -181,11 +186,11 @@ def main():
     """Main Streamlit application."""
     
     # Header
-    st.markdown('<h1 class="main-header">🏥 CodersHub Insurance Query Solver</h1>', unsafe_allow_html=True)
+    st.markdown('<h1 class="main-header">🏥 InsureQuery – AI Insurance Decision System</h1>', unsafe_allow_html=True)
     
     st.markdown("""
-    Welcome to the AI-powered insurance claims processing system. Upload your policy documents 
-    and ask natural language questions to get instant approval decisions with clear justifications.
+    Welcome to InsureQuery: an enterprise Retrieval-Augmented Generation (RAG) system for insurance claims.
+    Upload your policy documents and ask natural language questions to get grounded approval decisions with verified source citations.
     """)
     
     # Initialize pipeline
@@ -325,7 +330,7 @@ def main():
                     preferred_model_arg = selected_model
                 with st.spinner("Processing your query..."):
                     start_time = time.time()
-                    result = st.session_state.pipeline.query(user_query.strip(),preferred_model=preferred_model_arg)
+                    result = asyncio.run(st.session_state.pipeline.query(user_query.strip(), preferred_model=preferred_model_arg))
                     processing_time = time.time() - start_time
                     
                     st.subheader("📋 Query Results")

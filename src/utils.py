@@ -11,6 +11,8 @@ from typing import Dict, Any, List, Optional
 from pathlib import Path
 import hashlib
 
+logger = logging.getLogger(__name__)
+
 def load_config(config_path: str = "config/config.yaml") -> Dict[str, Any]:
     """Load configuration from YAML file."""
     try:

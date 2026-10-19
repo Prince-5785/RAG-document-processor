@@ -1,0 +1,31 @@
+{
+  "total_evaluated_queries": 35,
+  "results": {
+    "Baseline: Dense Vector Only": {
+      "hit_1": 45.71,
+      "hit_3": 74.29,
+      "hit_5": 77.14,
+      "mrr": 0.5929,
+      "avg_latency_ms": 71.48
+    },
+    "Dense + Cross-Encoder Reranker": {
+      "hit_1": 74.29,
+      "hit_3": 88.57,
+      "hit_5": 94.29,
+      "mrr": 0.8238,
+      "avg_latency_ms": 196.21
+    },
+    "InsureQuery Hybrid (BM25 + Dense + Reranker + Guardrail)": {
+      "hit_1": 65.71,
+      "hit_3": 74.29,
+      "hit_5": 77.14,
+      "mrr": 0.7024,
+      "avg_latency_ms": 104.69
+    }
+  },
+  "improvement": {
+    "hit_1_absolute_gain": 20.0,
+    "hit_1_relative_gain_pct": 43.75,
+    "mrr_relative_gain_pct": 18.47
+  }
+}

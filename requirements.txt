@@ -1,9 +1,11 @@
 # Core ML and NLP libraries
 torch>=2.0.0
+torchvision>=0.15.0
 transformers>=4.30.0
 sentence-transformers>=2.2.2
 langchain>=0.1.0
 langchain-community>=0.0.20
+langchain-text-splitters>=0.0.1
 
 # Vector database
 chromadb>=0.4.0
@@ -17,6 +19,7 @@ python-multipart>=0.0.6
 # Web framework
 streamlit>=1.28.0
 streamlit-extras>=0.3.0
+watchdog>=3.0.0
 
 
 # Data processing
@@ -54,7 +57,11 @@ loguru>=0.7.0
 # Configuration management
 pyyaml>=6.0.0
 
-#api management
+# Caching and Hybrid Search
+redis>=5.0.0
+rank-bm25>=0.2.2
+
+# API management
 groq
 fastapi>=0.111.0
 uvicorn[standard]>=0.29.0

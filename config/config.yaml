@@ -1,22 +1,26 @@
-# LLM-Powered Document Processing System Configuration
+# InsureQuery System Configuration
+# LLM-Powered Insurance Document Processing & Decision Engine
+
+project:
+  name: "InsureQuery"
+  version: "2.0.0"
 
 embedding:
   model_name: "sentence-transformers/all-MiniLM-L6-v2"
   device: "cpu"
   batch_size: 32
   reranker:
-    # THIS IS THE CRITICAL FIX: The model name must have the 'cross-encoder/' prefix
     model_name: "cross-encoder/ms-marco-MiniLM-L-6-v2"
     device: "cpu"
 
 llm:
   api:
-    # The actual keys will be injected from .env by the pipeline
+    # Keys injected from .env via GROQ_API_KEYS (comma separated) or GROQ_API_KEY
     model_sequence:
-      - 'llama-3.3-70b-versatile'
-      - 'meta-llama/llama-4-maverick-17b-128e-instruct'
-      - 'gemma2-9b-it'
-      - 'llama-3.1-8b-instant'
+      - 'qwen/qwen3.8-27b'
+      - 'openai/gpt-oss-120b'
+      - 'openai/gpt-oss-20b'
+      - 'allam-2-7b'
     retries:
       max_attempts: 5
       initial_delay: 1.0
@@ -33,27 +37,43 @@ llm:
     max_new_tokens_decision: 500
 
 document_processing:
-  chunk_size: 1000
-  chunk_overlap: 300 # Increased for better context in chunks
+  chunk_size: 800
+  chunk_overlap: 200
+  max_file_size_mb: 25
+  allowed_extensions: ["pdf", "docx", "eml", "txt"]
 
 vector_store:
   persist_directory: "./data/chroma_index"
-  collection_name: "insurance_documents"
+  collection_name: "insurequery_documents"
   distance_metric: "cosine"
   
 retrieval:
-  candidate_k: 25 # Number of initial candidates for the re-ranker
-  top_k: 5       # Final number of documents to send to the LLM
-  score_threshold: 0.3
-  
+  candidate_k: 25      # Initial candidates from vector + BM25 search
+  top_k: 5             # Final reranked candidates sent to LLM
+  score_threshold: 0.3 # Guardrail threshold (drop below, or return not-found)
+  hybrid_search:
+    enabled: true
+    vector_weight: 0.6
+    bm25_weight: 0.4
+    rrf_k: 60
+
+cache:
+  enable_embedding_cache: true
+  backend: "redis"  # "redis" with transparent in-memory fallback
+  redis_url: "redis://localhost:6379/0"
+  ttl_seconds: 86400  # 24 hours
+  cache_directory: "./data/cache"
+
 ui:
-  title: "CodersHub Insurance Query Solver"
+  title: "InsureQuery – AI Insurance Decision System"
   supported_formats: ["pdf", "docx", "eml", "txt"]
-  
+
+api:
+  title: "InsureQuery API"
+  description: "Enterprise RAG API for Insurance Policy Analysis, Hybrid Retrieval, and Claim Verification"
+  version: "2.0.0"
+  auth_enabled: true  # Checks INSUREQUERY_API_KEY or Bearer token (permissive in dev if not set)
+
 logging:
   level: "INFO"
   format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-  
-cache:
-  enable_embedding_cache: true
-  cache_directory: "./data/cache"

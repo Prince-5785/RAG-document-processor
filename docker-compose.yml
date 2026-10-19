@@ -1,8 +1,52 @@
 version: '3.8'
 
 services:
-  rag-system:
+  # InsureQuery FastAPI Backend Engine
+  insurequery-api:
     build: .
+    container_name: insurequery-api
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data
+      - ./config:/app/config
+    environment:
+      - PYTHONPATH=/app
+      - REDIS_URL=redis://redis:6379/0
+      - GROQ_API_KEYS=${GROQ_API_KEYS:-}
+      - INSUREQUERY_API_KEY=${INSUREQUERY_API_KEY:-}
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+
+  # Redis Distributed Cache for Embeddings
+  redis:
+    image: redis:7-alpine
+    container_name: insurequery-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    restart: unless-stopped
+
+  # Optional Streamlit UI Service
+  insurequery-ui:
+    build: .
+    container_name: insurequery-ui
+    command: streamlit run app.py --server.port=8501 --server.address=0.0.0.0
     ports:
       - "8501:8501"
     volumes:
@@ -10,25 +54,13 @@ services:
       - ./config:/app/config
     environment:
       - PYTHONPATH=/app
-      - STREAMLIT_SERVER_PORT=8501
-      - STREAMLIT_SERVER_ADDRESS=0.0.0.0
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8501/_stcore/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
-    restart: unless-stopped
-    
-  # Optional: Add a reverse proxy for production
-  nginx:
-    image: nginx:alpine
-    ports:
-      - "80:80"
-    volumes:
-      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - REDIS_URL=redis://redis:6379/0
+      - GROQ_API_KEYS=${GROQ_API_KEYS:-}
     depends_on:
-      - rag-system
-    restart: unless-stopped
+      - insurequery-api
     profiles:
-      - production
+      - full
+    restart: unless-stopped
+
+volumes:
+  redis_data:
