@@ -13,6 +13,7 @@ Implements:
 import logging
 import json
 import os
+import time
 import uuid
 import hashlib
 import asyncio
@@ -59,13 +60,37 @@ class RAGPipeline:
         self.top_k = self.retrieval_config.get('top_k', 5)
         self.score_threshold = float(self.retrieval_config.get('score_threshold', 0.3))
         
+        # Stage latency tracking for observability
+        self.stage_latencies = {
+            'embed_ms': 0.0,
+            'bm25_ms': 0.0,
+            'rerank_ms': 0.0,
+            'llm_ms': 0.0
+        }
+        
         # Thread pool executor for non-blocking CPU-bound math/model inferences
         self.executor = ThreadPoolExecutor(max_workers=4)
         
         # In-memory chunk cache for BM25 index
         self._all_indexed_chunks: List[Dict[str, Any]] = []
+        self._rebuild_bm25_from_vector_store()
         
         self.logger.info(f"InsureQuery RAG Pipeline initialized (threshold={self.score_threshold}, top_k={self.top_k})")
+
+    def _rebuild_bm25_from_vector_store(self) -> None:
+        """Reloads stored chunks from ChromaDB on startup and rebuilds the BM25 index."""
+        try:
+            stored_chunks = self.vector_store.get_all_chunks()
+            if stored_chunks:
+                self._all_indexed_chunks = stored_chunks
+                self.hybrid_retriever.build_bm25_index(self._all_indexed_chunks)
+                self.logger.info(f"Rebuilt BM25 index with {len(stored_chunks)} stored chunks from ChromaDB.")
+        except Exception as e:
+            self.logger.warning(f"Could not rebuild BM25 index from vector store: {e}")
+
+    def get_stage_latencies(self) -> Dict[str, float]:
+        """Returns the most recent stage latencies in milliseconds."""
+        return dict(self.stage_latencies)
 
     def index_documents(
         self,
@@ -184,19 +209,23 @@ class RAGPipeline:
 
         def _do_hybrid_retrieve() -> List[Dict[str, Any]]:
             # 1. Dense vector candidate retrieval
+            t0 = time.time()
             query_emb = self.embedding_service.encode_single_text(query_text)
             dense_docs = self.vector_store.similarity_search(
                 query_emb,
                 top_k=self.candidate_k,
                 document_ids=document_ids
             )
+            embed_ms = round((time.time() - t0) * 1000, 2)
 
             # 2. BM25 sparse candidate retrieval
+            t1 = time.time()
             bm25_docs = self.hybrid_retriever.search_bm25(
                 query_text,
                 top_k=self.candidate_k,
                 document_ids=document_ids
             )
+            bm25_ms = round((time.time() - t1) * 1000, 2)
 
             # 3. Reciprocal Rank Fusion
             fused_candidates = self.hybrid_retriever.fuse_results(
@@ -206,10 +235,23 @@ class RAGPipeline:
             )
 
             if not fused_candidates:
+                self.stage_latencies.update({
+                    'embed_ms': embed_ms,
+                    'bm25_ms': bm25_ms,
+                    'rerank_ms': 0.0
+                })
                 return []
 
             # 4. Cross-Encoder Re-ranking
+            t2 = time.time()
             reranked = self.embedding_service.rerank_documents(query_text, fused_candidates)
+            rerank_ms = round((time.time() - t2) * 1000, 2)
+
+            self.stage_latencies.update({
+                'embed_ms': embed_ms,
+                'bm25_ms': bm25_ms,
+                'rerank_ms': rerank_ms
+            })
             return reranked
 
         # Run CPU-bound retrieval & reranking in executor
@@ -354,7 +396,8 @@ class RAGPipeline:
         self,
         user_query: str,
         preferred_model: Optional[str] = None,
-        document_ids: Optional[List[str]] = None
+        document_ids: Optional[List[str]] = None,
+        sum_insured: Optional[float] = None
     ) -> Dict[str, Any]:
         """
         Evaluates an insurance query for structured decision-making (Approval/Rejection with Payout).
@@ -368,10 +411,12 @@ class RAGPipeline:
                 retrieval_task = self.retrieve_relevant_chunks(user_query, document_ids=document_ids)
 
                 parsed_query, final_docs = await asyncio.gather(parsed_query_task, retrieval_task)
+                if sum_insured is not None:
+                    parsed_query['sum_insured'] = sum_insured
 
                 # Threshold guardrail check
                 if not final_docs:
-                    return {
+                    rejected_result = {
                         'query': user_query,
                         'parsed_query': parsed_query,
                         'decision': 'REJECTED',
@@ -379,24 +424,28 @@ class RAGPipeline:
                         'justification': 'No relevant policy clauses met the similarity threshold to support this claim.',
                         'retrieved_documents': 0,
                         'relevant_clauses': [],
+                        'clause_ids': [],
                         'metadata': {
                             'processing_successful': True,
                             'threshold_triggered': True
-                        },
-                        'json_output': self._generate_json_output({
-                            'query': user_query,
-                            'parsed_query': parsed_query,
-                            'decision': 'REJECTED',
-                            'payout': 0,
-                            'justification': 'No relevant policy clauses met the similarity threshold to support this claim.',
-                            'relevant_clauses': []
-                        })
+                        }
                     }
+                    rejected_result['json_output'] = self._generate_json_output({
+                        'query': user_query,
+                        'parsed_query': parsed_query,
+                        'decision': 'REJECTED',
+                        'payout': 0,
+                        'justification': 'No relevant policy clauses met the similarity threshold to support this claim.',
+                        'relevant_clauses': []
+                    })
+                    return rejected_result
 
                 # LLM makes decision on retrieved clauses
+                t_llm = time.time()
                 decision_result = await self.llm_service.make_decision(
                     parsed_query, final_docs, preferred_model=preferred_model
                 )
+                self.stage_latencies['llm_ms'] = round((time.time() - t_llm) * 1000, 2)
                 
                 relevant_clauses = [{
                     'text': doc['text'][:250] + '...' if len(doc['text']) > 250 else doc['text'],
@@ -420,6 +469,7 @@ class RAGPipeline:
                 }
                 
                 result['json_output'] = self._generate_json_output(result)
+                result['clause_ids'] = [e['clause_id'] for e in result['json_output'].get('evidence', [])]
                 return result
                 
         except Exception as e:

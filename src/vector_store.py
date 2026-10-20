@@ -85,10 +85,36 @@ class VectorStore:
 
     def register_document(self, doc_id: str, metadata: Dict[str, Any]) -> None:
         """Records a document in the local registry."""
-        metadata['indexed_at'] = metadata.get('indexed_at') or datetime.utcnow().isoformat()
-        metadata['id'] = doc_id
-        self.document_registry[doc_id] = metadata
+        clean_metadata = {k: v for k, v in metadata.items() if k != 'file_path'}
+        clean_metadata['indexed_at'] = clean_metadata.get('indexed_at') or datetime.utcnow().isoformat()
+        clean_metadata['id'] = doc_id
+        self.document_registry[doc_id] = clean_metadata
         self._save_registry()
+
+    def get_all_chunks(self) -> List[Dict[str, Any]]:
+        """Retrieves all document chunks with their texts and metadatas from ChromaDB."""
+        if not CHROMADB_AVAILABLE:
+            return []
+        if self.collection is None:
+            try:
+                self.initialize()
+            except Exception as e:
+                self.logger.warning(f"Could not initialize ChromaDB to fetch all chunks: {e}")
+                return []
+        try:
+            results = self.collection.get(include=['documents', 'metadatas'])
+            documents = results.get('documents', []) or []
+            metadatas = results.get('metadatas', []) or []
+            chunks = []
+            for doc_text, meta in zip(documents, metadatas):
+                chunks.append({
+                    'text': doc_text,
+                    'metadata': meta or {}
+                })
+            return chunks
+        except Exception as e:
+            self.logger.error(f"Failed to fetch all chunks from ChromaDB: {e}", exc_info=True)
+            return []
 
     def list_documents(self) -> List[Dict[str, Any]]:
         """Returns all currently indexed documents."""

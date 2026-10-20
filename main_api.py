@@ -10,9 +10,9 @@ import uuid
 import logging
 import tempfile
 import asyncio
+import secrets
 from typing import List, Optional, Dict, Any
 
-import httpx
 from fastapi import FastAPI, Depends, HTTPException, status, Header, UploadFile, File, Request, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, JSONResponse
@@ -29,12 +29,15 @@ app = FastAPI(
     version="2.0.0"
 )
 
-# Enable CORS for web frontends
+# Lock CORS to production domain (customizable via ALLOWED_ORIGINS env)
+ALLOWED_ORIGINS = [
+    origin.strip() for origin in os.environ.get("ALLOWED_ORIGINS", "https://prince-gupta.me").split(",") if origin.strip()
+]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
+    allow_origins=ALLOWED_ORIGINS,
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
 
@@ -48,6 +51,7 @@ METRICS = {
     'start_time': time.time(),
     'latencies': []
 }
+
 
 # --- Request ID and Logging Middleware ---
 @app.middleware("http")
@@ -83,12 +87,15 @@ async def request_logging_middleware(request: Request, call_next):
 # --- Authentication Dependency ---
 async def verify_auth(authorization: Optional[str] = Header(None)):
     """
-    Verifies Bearer token against environment variable INSUREQUERY_API_KEY.
-    If no key is configured in environment, requests are permitted in development mode.
+    Fails closed on authentication. Requires INSUREQUERY_API_KEY environment variable.
+    Uses timing-safe comparison with secrets.compare_digest.
     """
-    configured_key = os.environ.get("INSUREQUERY_API_KEY") or os.environ.get("API_KEY")
+    configured_key = os.environ.get("INSUREQUERY_API_KEY")
     if not configured_key:
-        return True  # Dev mode: permissive when no key configured
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Server auth not configured"
+        )
 
     if not authorization:
         raise HTTPException(
@@ -97,7 +104,7 @@ async def verify_auth(authorization: Optional[str] = Header(None)):
         )
     try:
         scheme, token = authorization.split()
-        if scheme.lower() != 'bearer' or token != configured_key:
+        if scheme.lower() != 'bearer' or not secrets.compare_digest(token, configured_key):
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid API key credentials"
@@ -137,6 +144,7 @@ class QueryResponse(BaseModel):
 
 class ClaimDecisionRequest(BaseModel):
     query: str = Field(..., description="Natural language insurance claim details")
+    sum_insured: Optional[int] = Field(None, description="Total sum insured in INR under the policy")
     document_ids: Optional[List[str]] = Field(None, description="Optional document IDs to restrict policy scope")
     preferred_model: Optional[str] = Field(None, description="Optional preferred LLM model")
 
@@ -147,6 +155,8 @@ class ClaimDecisionResponse(BaseModel):
     payout: int
     currency: str
     justification: str
+    model_used: Optional[str] = None
+    clause_ids: List[str] = Field(default_factory=list, description="IDs of clauses relied on")
     evidence: List[Dict[str, Any]]
     processing_metadata: Dict[str, Any]
 
@@ -158,18 +168,6 @@ class DocumentUploadResponse(BaseModel):
     status: str
     message: str
 
-class DocumentUrlUploadRequest(BaseModel):
-    url: str
-    document_id: Optional[str] = None
-
-# Backward compatibility request/response for HackRX
-class HackRXRunRequest(BaseModel):
-    documents: str
-    questions: List[str]
-
-class HackRXRunResponse(BaseModel):
-    answers: List[str]
-
 
 # --- Document Management Endpoints ---
 
@@ -180,10 +178,13 @@ async def upload_document(
 ):
     """
     Upload an insurance document (PDF, Word, Email, or TXT) to index into the vector store.
-    Validates file format and size.
+    Validates file format and size, then indexes non-blockingly via executor.
     """
     if not pipeline:
-        raise HTTPException(status_code=500, detail="RAG Pipeline is not initialized")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="RAG Pipeline is not initialized"
+        )
 
     allowed_exts = pipeline.document_processor.get_supported_formats()
     ext = os.path.splitext(file.filename)[1].lower().lstrip('.')
@@ -207,9 +208,11 @@ async def upload_document(
         tmp_path = tmp.name
 
     try:
-        # Preserve original filename
         custom_id = str(uuid.uuid4())
-        index_res = pipeline.index_documents([tmp_path], document_id=custom_id)
+        loop = asyncio.get_running_loop()
+        index_res = await loop.run_in_executor(
+            None, pipeline.index_documents, [tmp_path], custom_id
+        )
         
         if index_res['failed_files'] > 0:
             raise HTTPException(
@@ -230,71 +233,51 @@ async def upload_document(
         if os.path.exists(tmp_path):
             os.unlink(tmp_path)
 
-@app.post("/documents/from-url", response_model=DocumentUploadResponse)
-async def upload_document_from_url(
-    req: DocumentUrlUploadRequest,
-    authorized: bool = Depends(verify_auth)
-):
-    """Downloads a document from a URL and indexes it."""
-    if not pipeline:
-        raise HTTPException(status_code=500, detail="RAG Pipeline not initialized")
-
-    try:
-        async with httpx.AsyncClient() as client:
-            resp = await client.get(req.url, follow_redirects=True, timeout=30.0)
-            resp.raise_for_status()
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Failed to fetch document from URL: {str(e)}")
-
-    content = resp.content
-    with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
-        tmp.write(content)
-        tmp_path = tmp.name
-
-    try:
-        doc_id = req.document_id or str(uuid.uuid4())
-        index_res = pipeline.index_documents([tmp_path], document_id=doc_id)
-        if index_res['failed_files'] > 0:
-            raise HTTPException(status_code=400, detail=f"Indexing failed: {index_res['errors']}")
-
-        METRICS['total_documents_uploaded'] += 1
-        return DocumentUploadResponse(
-            document_id=doc_id,
-            filename=os.path.basename(req.url),
-            file_size_bytes=len(content),
-            chunk_count=index_res['total_chunks'],
-            status="ready",
-            message="Document downloaded and indexed successfully."
-        )
-    finally:
-        if os.path.exists(tmp_path):
-            os.unlink(tmp_path)
 
 @app.get("/documents")
 async def list_documents(authorized: bool = Depends(verify_auth)):
     """List all indexed documents with metadata, chunk count, and pages."""
     if not pipeline:
-        raise HTTPException(status_code=500, detail="Pipeline not initialized")
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Pipeline not initialized")
     return {"documents": pipeline.list_documents()}
+
 
 @app.get("/documents/{document_id}")
 async def get_document(document_id: str, authorized: bool = Depends(verify_auth)):
     """Get metadata for a specific document."""
     if not pipeline:
-        raise HTTPException(status_code=500, detail="Pipeline not initialized")
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Pipeline not initialized")
     doc = pipeline.vector_store.get_document(document_id)
     if not doc:
-        raise HTTPException(status_code=404, detail=f"Document '{document_id}' not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Document '{document_id}' not found")
     return doc
+
+
+@app.get("/documents/{document_id}/status")
+async def get_document_status(document_id: str, authorized: bool = Depends(verify_auth)):
+    """Check indexing and readiness status for a document."""
+    if not pipeline:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Pipeline not initialized")
+    doc = pipeline.vector_store.get_document(document_id)
+    if not doc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Document '{document_id}' not found")
+    return {
+        "document_id": document_id,
+        "filename": doc.get("filename"),
+        "status": doc.get("status", "ready"),
+        "chunk_count": doc.get("chunk_count", 0),
+        "indexed_at": doc.get("indexed_at")
+    }
+
 
 @app.delete("/documents/{document_id}")
 async def delete_document(document_id: str, authorized: bool = Depends(verify_auth)):
     """Delete a document and its chunks from the vector store."""
     if not pipeline:
-        raise HTTPException(status_code=500, detail="Pipeline not initialized")
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Pipeline not initialized")
     success = pipeline.delete_document(document_id)
     if not success:
-        raise HTTPException(status_code=404, detail=f"Failed to delete document '{document_id}'")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Failed to delete document '{document_id}'")
     return {"status": "deleted", "document_id": document_id}
 
 
@@ -310,7 +293,7 @@ async def query_document(
     and returns verified source citations with file names and page numbers.
     """
     if not pipeline:
-        raise HTTPException(status_code=500, detail="Pipeline not initialized")
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Pipeline not initialized")
 
     METRICS['total_queries'] += 1
     result = await pipeline.answer_with_citations(
@@ -324,6 +307,7 @@ async def query_document(
         threshold_applied=result['threshold_applied']
     )
 
+
 @app.post("/query/stream")
 async def query_stream(
     request: QueryRequest,
@@ -334,7 +318,7 @@ async def query_stream(
     Sends source citations in the initial event, followed by live generated tokens.
     """
     if not pipeline:
-        raise HTTPException(status_code=500, detail="Pipeline not initialized")
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Pipeline not initialized")
 
     METRICS['total_stream_queries'] += 1
     generator = pipeline.stream_answer(
@@ -352,6 +336,7 @@ async def query_stream(
         }
     )
 
+
 @app.post("/query/claim", response_model=ClaimDecisionResponse)
 async def query_claim_decision(
     request: ClaimDecisionRequest,
@@ -359,81 +344,44 @@ async def query_claim_decision(
 ):
     """
     Evaluates an insurance claim based on retrieved policy clauses.
-    Returns structured decision (APPROVED / REJECTED), payout amount, justification, and cited clauses.
+    Returns structured decision (APPROVED / REJECTED / NEEDS_REVIEW), payout amount,
+    justification, model used, and cited clause IDs.
     """
     if not pipeline:
-        raise HTTPException(status_code=500, detail="Pipeline not initialized")
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Pipeline not initialized")
 
     METRICS['total_claim_evaluations'] += 1
     result = await pipeline.query(
         user_query=request.query,
         preferred_model=request.preferred_model,
-        document_ids=request.document_ids
+        document_ids=request.document_ids,
+        sum_insured=request.sum_insured
     )
     json_out = result.get('json_output', {})
+    model_used = result.get('metadata', {}).get('model_used') or json_out.get('processing_metadata', {}).get('model_used', 'unknown')
+
     return ClaimDecisionResponse(
         claim_id=json_out.get('claim_id', 'CLM_UNKNOWN'),
         query=request.query,
-        decision=result.get('decision', 'REJECTED'),
+        decision=result.get('decision', 'NEEDS_REVIEW'),
         payout=result.get('payout', 0),
         currency=json_out.get('currency', 'INR'),
         justification=result.get('justification', ''),
+        model_used=model_used,
+        clause_ids=result.get('clause_ids', []),
         evidence=json_out.get('evidence', []),
         processing_metadata=result.get('metadata', {})
     )
-
-
-# --- Backward Compatibility Route for HackRX ---
-
-@app.post("/hackrx/run", response_model=HackRXRunResponse)
-async def run_hackrx_processing(
-    request: HackRXRunRequest, 
-    authorized: bool = Depends(verify_auth)
-):
-    """
-    Backward-compatible contest endpoint.
-    Downloads the document URL, indexes it (skipping re-index if content hash seen),
-    and answers all questions concurrently.
-    """
-    if not pipeline:
-        raise HTTPException(status_code=500, detail="Pipeline not initialized")
-
-    try:
-        async with httpx.AsyncClient() as client:
-            resp = await client.get(request.documents, follow_redirects=True, timeout=30.0)
-            resp.raise_for_status()
-        
-        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=True) as temp_file:
-            temp_file.write(resp.content)
-            temp_file.flush()
-            
-            # Index document with content-hash check (no more global reset!)
-            indexing_result = pipeline.index_documents([temp_file.name])
-            if indexing_result.get('failed_files', 0) > 0 and indexing_result.get('processed_files', 0) == 0:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Failed to process document: {indexing_result['errors']}"
-                )
-
-            tasks = [pipeline.answer_question(q) for q in request.questions]
-            answers = await asyncio.gather(*tasks)
-
-    except httpx.RequestError as e:
-        raise HTTPException(status_code=400, detail=f"Failed to download document: {str(e)}")
-    except Exception as e:
-        logger.error(f"Error in /hackrx/run: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Internal error: {str(e)}")
-        
-    return HackRXRunResponse(answers=answers)
 
 
 # --- Observability Endpoints ---
 
 @app.get("/metrics")
 def get_metrics():
-    """Returns runtime latency, request counters, and cache stats."""
+    """Returns runtime latency, request counters, cache stats, and per-stage latencies."""
     avg_latency = (sum(METRICS['latencies']) / len(METRICS['latencies'])) if METRICS['latencies'] else 0.0
     cache_stats = pipeline.embedding_service.cache_service.get_stats() if pipeline else {}
+    stage_latencies = pipeline.get_stage_latencies() if pipeline else {}
     
     return {
         'uptime_seconds': round(time.time() - METRICS['start_time'], 1),
@@ -443,13 +391,23 @@ def get_metrics():
         'total_claim_evaluations': METRICS['total_claim_evaluations'],
         'total_documents_uploaded': METRICS['total_documents_uploaded'],
         'avg_latency_ms': round(avg_latency, 2),
+        'stage_latencies': stage_latencies,
         'cache': cache_stats
     }
 
+
 @app.get("/health")
 def health_check():
-    """Health check endpoint reporting pipeline status."""
+    """Health check endpoint reporting pipeline status. Returns 503 if unhealthy."""
     if not pipeline:
-        return {"status": "unhealthy", "error": "Pipeline not initialized"}
+        return JSONResponse(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            content={"status": "unhealthy", "error": "Pipeline not initialized"}
+        )
     status_info = pipeline.get_system_status()
+    if status_info.get("pipeline_status") != "healthy":
+        return JSONResponse(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            content=status_info
+        )
     return status_info

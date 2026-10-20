@@ -456,7 +456,9 @@ Response:"""
             }
 
         return {
-            'decision': 'APPROVED', 'payout': 50000,
-            'justification': f"Claim tentatively approved under general hospitalization terms. Age: {age or 'N/A'}, Procedure: {procedure or 'medical treatment'}.",
-            'raw_response': "Fallback decision: APPROVED", 'model_used': 'rule-based-fallback'
+            'decision': 'NEEDS_REVIEW',
+            'payout': 0,
+            'justification': f"Automated evaluation unavailable (LLM service unreachable or unconfigured). Claim requires manual underwriter review. Details: Age={age or 'N/A'}, Procedure={procedure or 'N/A'}.",
+            'raw_response': "Fallback decision: NEEDS_REVIEW",
+            'model_used': 'rule-based-fallback'
         }

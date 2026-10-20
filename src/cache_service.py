@@ -43,7 +43,8 @@ class CacheService:
 
     def _init_backend(self) -> None:
         """Attempts to initialize Redis client; falls back to in-memory cache."""
-        if REDIS_AVAILABLE and self.redis_url:
+        requested_backend = self.config.get('backend', 'redis')
+        if requested_backend != 'in_memory' and REDIS_AVAILABLE and self.redis_url:
             try:
                 self.redis_client = redis.from_url(
                     self.redis_url,

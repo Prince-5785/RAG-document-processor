@@ -301,6 +301,94 @@ class TestRAGPipeline:
         assert result['json_output']['currency'] == 'INR'
         assert len(result['relevant_clauses']) == 1
 
+    @pytest.mark.asyncio
+    @patch('src.rag_pipeline.load_config')
+    async def test_query_basic(self, mock_load_config, sample_config):
+        """Test basic query processing with retrieve_relevant_chunks and decision mocks."""
+        mock_load_config.return_value = sample_config
+        pipeline = RAGPipeline()
+
+        pipeline.llm_service.parse_query = AsyncMock(return_value={
+            'age': 30, 'gender': 'male', 'procedure': 'surgery'
+        })
+        pipeline.retrieve_relevant_chunks = AsyncMock(return_value=[
+            {
+                'text': 'Sample policy clause',
+                'score': 0.8,
+                'rerank_score': 0.85,
+                'metadata': {'file_name': 'policy.txt', 'page': 1}
+            }
+        ])
+        pipeline.llm_service.make_decision = AsyncMock(return_value={
+            'decision': 'APPROVED',
+            'payout': 50000,
+            'justification': 'Claim approved based on policy terms.',
+            'model_used': 'mock-model'
+        })
+
+        result = await pipeline.query("30-year-old male needs surgery")
+
+        assert result['decision'] == 'APPROVED'
+        assert result['payout'] == 50000
+        assert 'justification' in result
+        assert result['metadata']['processing_successful'] is True
+
+    @pytest.mark.asyncio
+    @patch('src.rag_pipeline.load_config')
+    async def test_query_with_error(self, mock_load_config, sample_config):
+        """Test query processing with error handling."""
+        mock_load_config.return_value = sample_config
+        pipeline = RAGPipeline()
+
+        pipeline.llm_service.parse_query = AsyncMock(side_effect=Exception("LLM error"))
+
+        result = await pipeline.query("Test query")
+
+        assert result['decision'] == 'ERROR'
+        assert result['payout'] == 0
+        assert 'internal error' in result['justification'].lower()
+        assert result['metadata']['processing_successful'] is False
+
+    @pytest.mark.asyncio
+    @patch('src.rag_pipeline.load_config')
+    async def test_batch_query(self, mock_load_config, sample_config):
+        """Test batch query processing."""
+        mock_load_config.return_value = sample_config
+        pipeline = RAGPipeline()
+
+        pipeline.query = AsyncMock(side_effect=[
+            {'decision': 'APPROVED', 'payout': 30000},
+            {'decision': 'REJECTED', 'payout': 0}
+        ])
+
+        queries = ["Query 1", "Query 2"]
+        results = await pipeline.batch_query(queries)
+
+        assert len(results) == 2
+        assert results[0]['decision'] == 'APPROVED'
+        assert results[1]['decision'] == 'REJECTED'
+        assert pipeline.query.call_count == 2
+
+    @patch('src.rag_pipeline.load_config')
+    def test_bm25_rebuild_on_restart(self, mock_load_config, sample_config):
+        """Test that pipeline startup reloads chunks from ChromaDB and rebuilds the BM25 index."""
+        from src.vector_store import VectorStore
+        mock_load_config.return_value = sample_config
+        
+        mock_chunks = [
+            {'text': 'Pre-existing cataract waiting period is 24 months.', 'metadata': {'file_name': 'policy.txt', 'page': 1, 'chunk_index': 0}},
+            {'text': 'Emergency ambulance cover up to ₹2,500.', 'metadata': {'file_name': 'policy.txt', 'page': 2, 'chunk_index': 1}}
+        ]
+        
+        with patch.object(VectorStore, 'get_all_chunks', return_value=mock_chunks):
+            pipeline = RAGPipeline()
+            assert len(pipeline._all_indexed_chunks) == 2
+            
+            # Verify BM25 search works without any new files being indexed
+            bm25_results = pipeline.hybrid_retriever.search_bm25('cataract', top_k=1)
+            assert len(bm25_results) > 0
+            assert 'cataract' in bm25_results[0]['text'].lower()
+
 
 if __name__ == "__main__":
     pytest.main([__file__])

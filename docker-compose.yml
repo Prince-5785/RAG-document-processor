@@ -1,20 +1,37 @@
 version: '3.8'
 
 services:
+  # Caddy Automatic HTTPS Reverse Proxy
+  caddy:
+    image: caddy:2
+    container_name: insurequery-caddy
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - insurequery-api
+    restart: unless-stopped
+
   # InsureQuery FastAPI Backend Engine
   insurequery-api:
     build: .
     container_name: insurequery-api
-    ports:
-      - "8000:8000"
+    expose:
+      - "8000"
     volumes:
-      - ./data:/app/data
-      - ./config:/app/config
+      - insure_data:/app/data
+      - hf_cache:/home/app/.cache/huggingface
     environment:
+      - APP_ENV=production
       - PYTHONPATH=/app
       - REDIS_URL=redis://redis:6379/0
       - GROQ_API_KEYS=${GROQ_API_KEYS:-}
       - INSUREQUERY_API_KEY=${INSUREQUERY_API_KEY:-}
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-https://prince-gupta.me}
     depends_on:
       redis:
         condition: service_healthy
@@ -26,12 +43,10 @@ services:
       start_period: 30s
     restart: unless-stopped
 
-  # Redis Distributed Cache for Embeddings
+  # Redis Distributed Cache for Embeddings (internal only, no exposed host ports)
   redis:
     image: redis:7-alpine
     container_name: insurequery-redis
-    ports:
-      - "6379:6379"
     volumes:
       - redis_data:/data
     command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
@@ -42,25 +57,9 @@ services:
       retries: 3
     restart: unless-stopped
 
-  # Optional Streamlit UI Service
-  insurequery-ui:
-    build: .
-    container_name: insurequery-ui
-    command: streamlit run app.py --server.port=8501 --server.address=0.0.0.0
-    ports:
-      - "8501:8501"
-    volumes:
-      - ./data:/app/data
-      - ./config:/app/config
-    environment:
-      - PYTHONPATH=/app
-      - REDIS_URL=redis://redis:6379/0
-      - GROQ_API_KEYS=${GROQ_API_KEYS:-}
-    depends_on:
-      - insurequery-api
-    profiles:
-      - full
-    restart: unless-stopped
-
 volumes:
+  insure_data:
+  hf_cache:
   redis_data:
+  caddy_data:
+  caddy_config:

@@ -1,0 +1,14 @@
+api.prince-gupta.me {
+    request_body {
+        max_size 30MB
+    }
+
+    # Hide internal observability counters from public callers
+    @metrics path /metrics
+    respond @metrics 404
+
+    # Reverse proxy to InsureQuery FastAPI container with unbuffered SSE streaming
+    reverse_proxy insurequery-api:8000 {
+        flush_interval -1
+    }
+}

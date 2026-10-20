@@ -1,68 +1,37 @@
-# Core ML and NLP libraries
-torch>=2.0.0
-torchvision>=0.15.0
-transformers>=4.30.0
-sentence-transformers>=2.2.2
-langchain>=0.1.0
-langchain-community>=0.0.20
-langchain-text-splitters>=0.0.1
+# Core ML & Embeddings (CPU-only PyTorch installed via extra-index-url in Docker)
+torch==2.3.0
+transformers>=4.40.0
+sentence-transformers>=2.7.0
 
-# Vector database
-chromadb>=0.4.0
+# Text Splitters & Vector Database
+chromadb>=0.5.0
+langchain>=0.2.0
+langchain-community>=0.2.0
+langchain-text-splitters>=0.2.0
 
-# Document processing
+# Document Parsing
 PyPDF2>=3.0.1
-pdfplumber>=0.9.0
-python-docx>=0.8.11
-python-multipart>=0.0.6
+pdfplumber>=0.11.0
+python-docx>=1.1.0
+python-multipart>=0.0.9
 
-# Web framework
-streamlit>=1.28.0
-streamlit-extras>=0.3.0
-watchdog>=3.0.0
-
-
-# Data processing
-pandas>=2.0.0
-numpy>=1.24.0
-
-# HTTP and API
-requests>=2.31.0
-httpx>=0.24.0
-
-# Utilities
-python-dotenv>=1.0.0
-pydantic>=2.0.0
-typing-extensions>=4.7.0
-
-# Development and testing
-pytest>=7.4.0
-pytest-asyncio>=0.21.0
-black>=23.0.0
-flake8>=6.0.0
-
-# Optional: For better PDF processing
-pymupdf>=1.23.0
-
-# Optional: For email processing
-email-validator>=2.0.0
-
-# Optional: For advanced text processing
-spacy>=3.6.0
-nltk>=3.8.0
-
-# Logging and monitoring
-loguru>=0.7.0
-
-# Configuration management
-pyyaml>=6.0.0
-
-# Caching and Hybrid Search
-redis>=5.0.0
+# Data & Math
+numpy>=1.26.0
+pandas>=2.2.0
 rank-bm25>=0.2.2
 
-# API management
-groq
+# Cache & Distributed Store
+redis>=5.0.4
+
+# LLM Providers & HTTP Clients
+groq>=0.9.0
+httpx>=0.27.0
+requests>=2.31.0
+
+# API Server
 fastapi>=0.111.0
 uvicorn[standard]>=0.29.0
-httpx>=0.27.0
+pydantic>=2.7.0
+python-dotenv>=1.0.1
+pyyaml>=6.0.1
+typing-extensions>=4.11.0

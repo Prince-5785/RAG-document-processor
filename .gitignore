@@ -74,6 +74,7 @@ __MACOSX/
 .pytest_cache/
 .coverage
 htmlcov/
+test_chroma_index/
 
 # Temporary files
 *.tmp
